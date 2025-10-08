@@ -8,6 +8,7 @@
 # - ✅ 料金計算: lib.costs.estimate_chat_cost_usd（config.MODEL_PRICES_USD 参照）
 # - ✅ トークン取得: lib.tokens.extract_tokens_from_response（modern専用）
 # - ✅ プロンプト管理: lib/prompts.py のレジストリに統一
+# - ✅ 文字起こし.py → 本ページへの自動引き継ぎ＋再読み込みボタン（本ファイルで追加）
 # ------------------------------------------------------------
 from __future__ import annotations
 
@@ -35,6 +36,16 @@ if not OPENAI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# ===== 文字起こしタブからの自動引き継ぎ（初回のみ） =====
+# 「文字起こし.py」で st.session_state["minutes_source_text"] に入れた内容を、
+# 本ページの入力欄（prep_source_text）へ最初の1回だけ自動反映します。
+if "prep_source_text_autofilled" not in st.session_state:
+    st.session_state["prep_source_text_autofilled"] = False
+if (not st.session_state["prep_source_text_autofilled"]) and st.session_state.get("minutes_source_text"):
+    st.session_state["prep_source_text"] = st.session_state["minutes_source_text"]
+    st.session_state["prep_source_text_autofilled"] = True
+    st.session_state["from_transcribe_notice"] = True  # 次のUIで一度だけ通知
 
 # ========================== モデル設定補助 ==========================
 def supports_temperature(model_name: str) -> bool:
@@ -120,6 +131,21 @@ with left:
 
 with right:
     st.subheader("入力テキスト")
+
+    # 自動取り込み通知（1回だけ）
+    if st.session_state.pop("from_transcribe_notice", False):
+        st.success("✅ 『文字起こし』ページからテキストを受け取りました。")
+
+    # 明示的に「文字起こしから再読み込み」するボタン
+    reload_col, _ = st.columns([1, 3])
+    if reload_col.button("↩ 文字起こしから再読み込み"):
+        if st.session_state.get("minutes_source_text"):
+            st.session_state["prep_source_text"] = st.session_state["minutes_source_text"]
+            st.toast("文字起こしテキストを再読み込みしました", icon="✅")
+        else:
+            st.toast("読み込める文字起こしテキストがありません", icon="⚠️")
+
+    # .txt ドロップ → prep_source_text へ格納
     up = st.file_uploader("文字起こしテキスト（.txt）をドロップ", type=["txt"], accept_multiple_files=False)
     if up is not None:
         raw = up.read()
@@ -132,18 +158,20 @@ with right:
                 text_from_file = raw.decode(errors="ignore")
         st.session_state["prep_source_text"] = text_from_file
 
-    if "minutes_source_text" not in st.session_state:
-        st.session_state["minutes_source_text"] = ""
-
+    # テキストエリア（優先: prep_source_text → 次点: minutes_source_text → 空）
     src = st.text_area(
         "文字起こしテキスト（貼り付け可）",
         value=st.session_state.get("prep_source_text", st.session_state.get("minutes_source_text", "")),
         height=420,
         placeholder="①ページの結果を引き継ぐか、ここに貼り付けるか、.txt をドロップしてください。",
+        key="prep_source_text_area",
     )
 
 # ========================== 実行（リトライなし一発実行） ==========================
 if run_btn:
+    # 直近のテキストエリア内容を最優先に使用
+    src = st.session_state.get("prep_source_text", st.session_state.get("minutes_source_text", ""))
+
     if not src.strip():
         st.warning("文字起こしテキストを入力してください。")
     else:
@@ -265,9 +293,9 @@ if run_btn:
                 st.write({"error": str(e)})
 
         st.session_state["prep_last_output"] = text
-        st.session_state["minutes_source_text"] = text
+        st.session_state["minutes_source_text"] = text  # ② 議事録作成タブへ渡す用
 
-# ========================== 引き渡し ==========================
+# ========================== 引き渡し（ボタン） ==========================
 if push_btn:
     out = st.session_state.get("prep_last_output") or st.session_state.get("minutes_source_text", "")
     if not out.strip():
