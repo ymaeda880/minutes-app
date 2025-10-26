@@ -159,7 +159,28 @@ if uploaded is not None:
                 data=mem_zip,
                 file_name=f"{base_name}_split_overlap.zip",
                 mime="application/zip",
+                #mime="application/octet-stream",            # ← ここを変更
+                #key="zip_dl_button"
             )
+
+            # --- ⚠ 注意メッセージを表示 ---
+            st.warning(
+                """
+                ⚠️ **ブラウザから「安全でないダウンロードがブロックされました」**
+                という警告が出る場合があります。
+
+                これはローカル環境（自己署名HTTPSやLAN内サーバー）でZIPファイルを配布する際に、
+                Chromeなどが自動的に安全確認を行うためです。
+
+                **ブロックされた場合は：** 
+
+                1️⃣ 再度「ダウンロード」ボタンを押してください．（この場合は「未確認」という名前がファイルにつきます．
+
+                2️⃣ 右上にブロックされたことを示す警告が出るので，保存クリックしてください．
+              
+                """,
+                icon="⚠️",
+)
 
             st.success(f"作成チャンク数: {len(parts)}  | 総再生時間: {hhmmss(len(audio))}")
 
