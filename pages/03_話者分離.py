@@ -28,7 +28,7 @@ from ui.style import disable_heading_anchors
 # ========================== 共通設定 ==========================
 st.set_page_config(page_title="③ 話者分離・整形（新）", page_icon="🎙️", layout="wide")
 disable_heading_anchors()
-st.title("③ 話者分離・整形（新）— 議事録の前処理")
+st.title("話者分離 — 文字起こしテキストの話者を分離")
 
 OPENAI_API_KEY = st.secrets.get("openai", {}).get("api_key") or st.secrets.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -118,7 +118,7 @@ with left:
     # 出力上限（modern専用）
     max_completion_tokens = st.slider(
         "最大出力トークン（目安）",
-        min_value=1000, max_value=40000, value=12000, step=500,
+        min_value=1000, max_value=120000, value=100000, step=500,
         help="2万文字級の整形なら 8,000〜12,000 程度を推奨（本版はリトライなし）。",
     )
 
@@ -137,8 +137,8 @@ with right:
         st.success("✅ 『文字起こし』ページからテキストを受け取りました。")
 
     # 明示的に「文字起こしから再読み込み」するボタン
-    reload_col, _ = st.columns([1, 3])
-    if reload_col.button("↩ 文字起こしから再読み込み"):
+    # reload_col, _ = st.columns([1, 3])
+    if st.button("↩ 文字起こしから再読み込み"):
         if st.session_state.get("minutes_source_text"):
             st.session_state["prep_source_text"] = st.session_state["minutes_source_text"]
             st.toast("文字起こしテキストを再読み込みしました", icon="✅")

@@ -1,3 +1,4 @@
+#lib/tokens.py
 """
 tokens.py — modern API 専用のトークン抽出ヘルパー（シンプル版）
 
@@ -62,15 +63,24 @@ def _read_usage_modern(usage_obj: Any) -> Dict[str, int]:
 
 
 def extract_tokens_from_usage(usage_obj: Any) -> Tokens:
-    """
-    usage から (input, output, total) を抽出して返す（modern 専用）。
-    total が 0 または欠損なら input + output で補完する。
-    """
     f = _read_usage_modern(usage_obj)
     input_i  = f["input_tokens"]
     output_i = f["output_tokens"]
     total_i  = f["total_tokens"] or (input_i + output_i)
+
+    # ---- modern usage フォールバック ----
+    # modern API は input/output を 0 のまま返すケースがある（total_tokens のみ有効）。
+    if total_i > 0 and input_i == 0 and output_i == 0:
+        # もっとも単純で安全な下限見積り → 全部 input とみなす
+        input_i = total_i
+        output_i = 0
+
+        # ※もし入力/出力を「半々」で扱いたければ以下を使う：
+        # input_i = total_i // 2
+        # output_i = total_i - input_i
+
     return Tokens(input_i, output_i, total_i)
+
 
 
 def extract_tokens_from_response(resp: Any) -> Tokens:
