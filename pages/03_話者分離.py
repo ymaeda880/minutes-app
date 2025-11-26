@@ -25,10 +25,14 @@ from lib.prompts import SPEAKER_PREP, get_group, build_prompt
 from config.config import DEFAULT_USDJPY
 from ui.style import disable_heading_anchors
 
+from lib.explanation import render_speaker_prep_expander
+
 # ========================== 共通設定 ==========================
 st.set_page_config(page_title="③ 話者分離・整形（新）", page_icon="🎙️", layout="wide")
 disable_heading_anchors()
 st.title("話者分離 — 文字起こしテキストの話者を分離")
+
+render_speaker_prep_expander()
 
 OPENAI_API_KEY = st.secrets.get("openai", {}).get("api_key") or st.secrets.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:

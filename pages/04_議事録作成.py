@@ -32,9 +32,12 @@ from lib.tokens import extract_tokens_from_response, debug_usage_snapshot  # mod
 from lib.costs import estimate_chat_cost_usd
 from config.config import DEFAULT_USDJPY
 
+from lib.explanation import render_minutes_maker_expander
+
 # ========================== 共通設定 ==========================
 st.set_page_config(page_title="④ 議事録作成", page_icon="📝", layout="wide")
 st.title("議事録作成 — 逐語録から正式議事録へ")
+render_minutes_maker_expander()
 
 OPENAI_API_KEY = st.secrets.get("openai", {}).get("api_key") or st.secrets.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:

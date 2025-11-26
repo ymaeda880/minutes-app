@@ -7,6 +7,8 @@ from pathlib import Path
 import streamlit as st
 from pydub import AudioSegment
 
+from lib.explanation import render_audio_split_expander
+
 st.set_page_config(page_title="音声分割ツール（MP3/WAV・オーバーラップ）", page_icon="🎧", layout="centered")
 st.title("🎧 音声分割ツール（MP3/WAV・オーバーラップ付き）")
 
@@ -14,6 +16,8 @@ st.write(
     "アップロードした音声（MP3/WAV）を一定長さで分割し、隣接チャンクに重なり（オーバーラップ）をつけます。"
     "文字起こし（transcription）前の前処理に行ってください。"
 )
+
+render_audio_split_expander()
 
 with st.sidebar:
     st.header("設定")

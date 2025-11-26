@@ -39,9 +39,13 @@ from config.config import (
 from lib.audio import get_audio_duration_seconds
 from ui.sidebarOld import init_metrics_state  # render_sidebar は使わない
 
+from lib.explanation import render_transcribe_continuous_expander
+
 # ================= ページ設定 =================
 st.set_page_config(page_title="01 文字起こし — Transcribe", layout="wide")
 st.title("① 文字起こし（連続対応）（GPT-4o Transcribe / Whisper）")
+
+render_transcribe_continuous_expander()
 
 # ================= 初期化 =================
 init_metrics_state()
