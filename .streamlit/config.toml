@@ -5,6 +5,8 @@ address = "0.0.0.0"
 baseUrlPath = "/minutes"
 enableCORS = false
 headless = true
+# ファイルアップロードの上限解除
+maxUploadSize = 1024
 
 
 # 開発環境 (自分だけで使う場合)
