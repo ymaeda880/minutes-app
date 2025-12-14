@@ -1,4 +1,4 @@
-# pages/05_文字起こし（連続対応）.py
+# pages/02_文字起こし（連続対応）.py
 # ============================================================
 # 📄 このファイルで最初にやっていること / 変更点（サマリ）
 # ------------------------------------------------------------
@@ -37,13 +37,34 @@ from config.config import (
     DEFAULT_USDJPY,
 )
 from lib.audio import get_audio_duration_seconds
-from ui.sidebarOld import init_metrics_state  # render_sidebar は使わない
+from ui.sidebar import init_metrics_state  # render_sidebar は使わない
 
 from lib.explanation import render_transcribe_continuous_expander
 
 # ================= ページ設定 =================
 st.set_page_config(page_title="01 文字起こし — Transcribe", layout="wide")
-st.title("① 文字起こし（連続対応）（GPT-4o Transcribe / Whisper）")
+st.title("文字起こし（連続対応）")
+
+# CSS を貼って赤くする（key="dl_combined"）
+# st.markdown(
+#     """
+#     <style>
+#     /* 🔴 連結テキスト用のダウンロードボタンだけ赤くする */
+#     #combined-download-wrapper button {
+#         background-color: #e02424 !important;  /* 赤 */
+#         color: white !important;
+#         border: none !important;
+#         font-weight: bold;
+#     }
+#     #combined-download-wrapper button:hover {
+#         background-color: #c81e1e !important;  /* 濃い赤 */
+#     }
+#     </style>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+
 
 render_transcribe_continuous_expander()
 
@@ -80,10 +101,16 @@ with col_left:
     # ---- モデル選択（ラジオボタン）----
     model = st.radio(
         "モデル",
-        options=["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
+        options=[
+            "whisper-1",
+            "gpt-4o-mini-transcribe",
+            "gpt-4o-transcribe",
+        ],
         index=0,
-        help="コスト/速度重視なら mini、精度重視なら 4o-transcribe、互換重視なら whisper-1。",
-    )
+        help=(
+            "OpenAI: 互換/精度重視。"
+        ),
+)
 
     uploaded_files = st.file_uploader(
         "音声ファイル（複数可：.wav / .mp3 / .m4a / .webm / .ogg）",
@@ -217,14 +244,14 @@ if go:
 
             # 個別DL
             base_filename = (uploaded.name.rsplit(".", 1)[0] if uploaded else f"transcript_{idx}").replace(" ", "_")
-            st.download_button(
-                "📝 このテキスト（.txt）をダウンロード",
-                data=(text or "").encode("utf-8"),
-                file_name=f"{base_filename}.txt",
-                mime="text/plain",
-                use_container_width=True,
-                key=f"dl_{idx}",
-            )
+            # st.download_button(
+            #     "📝 このテキスト（.txt）をダウンロード",
+            #     data=(text or "").encode("utf-8"),
+            #     file_name=f"{base_filename}.txt",
+            #     mime="text/plain",
+            #     use_container_width=True,
+            #     key=f"dl_{idx}",
+            # )
 
             # 個別メトリクス表
             metrics_data = {
@@ -270,6 +297,10 @@ if go:
 
         # 連結テキストのDL & クリップボード
         comb_fname = "transcripts_combined"
+  
+        # 🔴 ラッパー div を追加
+        #st.markdown('<div id="combined-download-wrapper">', unsafe_allow_html=True)
+
         st.download_button(
             "🧩 連結テキスト（.txt）をダウンロード",
             data=(combined_text or "").encode("utf-8"),
@@ -277,7 +308,10 @@ if go:
             mime="text/plain",
             use_container_width=True,
             key="dl_combined",
+            help="combined download button",
         )
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
         safe_json = json.dumps(combined_text or "", ensure_ascii=False)
         st.components.v1.html(f"""
@@ -338,14 +372,14 @@ if go:
     st.session_state["transcribed_text"] = combined_text
 
 # ================= 次タブへの引き継ぎ =================
-if st.session_state.get("transcribed_text"):
-    st.info("👇 下のボタンで話者分離タブへテキストを引き継げます。")
-    with st.expander("直近の文字起こし（確認用：連結テキストの先頭抜粋）", expanded=False):
-        st.text_area(
-            "文字起こしテキスト（連結・抜粋）",
-            value=st.session_state["transcribed_text"][:2000],
-            height=160,
-        )
-    if st.button("② 話者分離タブへ引き継ぐ", type="primary", use_container_width=True):
-        st.session_state["minutes_source_text"] = st.session_state["transcribed_text"]
-        st.success("引き継ぎました。上部タブ『② 話者分離（Markdown）』を開いてください。")
+# if st.session_state.get("transcribed_text"):
+#     st.info("👇 下のボタンで話者分離タブへテキストを引き継げます。")
+#     with st.expander("直近の文字起こし（確認用：連結テキストの先頭抜粋）", expanded=False):
+#         st.text_area(
+#             "文字起こしテキスト（連結・抜粋）",
+#             value=st.session_state["transcribed_text"][:2000],
+#             height=160,
+#         )
+#     if st.button("② 話者分離タブへ引き継ぐ", type="primary", use_container_width=True):
+#         st.session_state["minutes_source_text"] = st.session_state["transcribed_text"]
+#         st.success("引き継ぎました。上部タブ『② 話者分離（Markdown）』を開いてください。")

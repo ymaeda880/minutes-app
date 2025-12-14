@@ -63,3 +63,25 @@ ALT_PROMPT = """あなたは日本語の会議文字起こしを整形する専�
    - その結果作成されるファイルが<span style="color: lightblue;">逐語録</span>になります．
 6. 議事録作成
    - <span style="color: lightblue;">逐語録</span>から<span style="color: lightblue;">議事録</span>を作成します．
+
+##########
+
+[Errno 2] No such file or directory: 'ffprobe'
+「ffprobe が見つからない（実行できない）」というエラー
+Streamlit コードには ffprobe を呼ぶ行は一切ありません。
+しかし、pydub が内部で ffmpeg / ffprobe を使う場合があります。
+
+🎯 結論：Mac に ffprobe（FFmpeg のセット）が入っていない
+FFmpeg を入れれば自動的に ffprobe も入る。
+
+✅ 解決方法（Mac）
+1）Homebrew で FFmpeg をインストールする
+
+ターミナルで：
+brew install ffmpeg
+
+これだけで OK です。
+ffmpeg と ffprobe が両方入ります：
+
+which ffmpeg
+which ffprobe

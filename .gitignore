@@ -20,3 +20,5 @@ __pycache__/
 data/*.zip
 data/raw/*
 
+# log_minutes のログ
+log_minutes.txt

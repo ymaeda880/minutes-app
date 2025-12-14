@@ -1,19 +1,21 @@
+#pages/04_話者分離.py
 # ------------------------------------------------------------
 # 🎙️ 話者分離・整形（議事録の前処理）— modern専用・リトライなし版
 # - .txt をドラッグ＆ドロップ or 貼り付け
 # - LLMで話者推定（S1/S2/...）＋発話ごとに改行・整形
-# - GPT-5 系列は temperature を変更不可（=1固定）→ UI 無効化＆API未送信
-# - 長文（~2万文字）対応：max_completion_tokens は大きめに設定して一発実行
+# - GPT-5 系列は temperature を変更不可（=1固定）→ UI なし（常に1）
+# - 長文（~2万文字）対応：max_completion_tokens=100000 固定で一発実行
 # - 空応答時は resp 全体を st.json で出してデバッグ
 # - ✅ 料金計算: lib.costs.estimate_chat_cost_usd（config.MODEL_PRICES_USD 参照）
 # - ✅ トークン取得: lib.tokens.extract_tokens_from_response（modern専用）
 # - ✅ プロンプト管理: lib/prompts.py のレジストリに統一
-# - ✅ 文字起こし.py → 本ページへの自動引き継ぎ＋再読み込みボタン（本ファイルで追加）
+# - ✅ 整形結果は minutes_source_text に保存し，議事録作成ページから自動参照
 # ------------------------------------------------------------
 from __future__ import annotations
 
 import time
 from typing import Dict, Any
+import datetime as dt
 
 import streamlit as st
 from openai import OpenAI
@@ -30,7 +32,7 @@ from lib.explanation import render_speaker_prep_expander
 # ========================== 共通設定 ==========================
 st.set_page_config(page_title="③ 話者分離・整形（新）", page_icon="🎙️", layout="wide")
 disable_heading_anchors()
-st.title("話者分離 — 文字起こしテキストの話者を分離")
+st.title("話者分離")
 
 render_speaker_prep_expander()
 
@@ -40,21 +42,6 @@ if not OPENAI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# ===== 文字起こしタブからの自動引き継ぎ（初回のみ） =====
-# 「文字起こし.py」で st.session_state["minutes_source_text"] に入れた内容を、
-# 本ページの入力欄（prep_source_text）へ最初の1回だけ自動反映します。
-if "prep_source_text_autofilled" not in st.session_state:
-    st.session_state["prep_source_text_autofilled"] = False
-if (not st.session_state["prep_source_text_autofilled"]) and st.session_state.get("minutes_source_text"):
-    st.session_state["prep_source_text"] = st.session_state["minutes_source_text"]
-    st.session_state["prep_source_text_autofilled"] = True
-    st.session_state["from_transcribe_notice"] = True  # 次のUIで一度だけ通知
-
-# ========================== モデル設定補助 ==========================
-def supports_temperature(model_name: str) -> bool:
-    """GPT-5系は temperature 変更不可（=1固定）。"""
-    return not model_name.startswith("gpt-5")
 
 # ========================== UI ==========================
 left, right = st.columns([1, 1], gap="large")
@@ -75,11 +62,14 @@ with left:
     if "extra_text" not in st.session_state:
         st.session_state["extra_text"] = ""
 
-    mandatory = st.text_area(
-        "必ず入る部分（常にプロンプトの先頭に含まれます）",
-        height=220,
-        key="mandatory_prompt",
-    )
+    # ★ 最初の必須プロンプトだけ畳む（ラベルは付けて非表示）
+    with st.expander("必ず入る部分（常にプロンプトの先頭に含まれます）", expanded=False):
+        mandatory = st.text_area(
+            "必ず入るプロンプト",
+            height=220,
+            key="mandatory_prompt",
+            label_visibility="collapsed",
+        )
 
     def _on_change_preset():
         st.session_state["preset_text"] = group.body_for_label(st.session_state["preset_label"])
@@ -96,58 +86,11 @@ with left:
     preset_text = st.text_area("（編集可）プリセット本文", height=120, key="preset_text")
     extra = st.text_area("追加指示（任意）", height=88, key="extra_text")
 
-    st.subheader("モデル設定")
-    model = st.selectbox(
-        "モデル",
-        [
-            "gpt-5",
-            "gpt-5-mini",
-            "gpt-5-nano",
-            "gpt-4.1-mini",
-            "gpt-4.1",
-        ],
-        index=1,
-    )
-
-    temp_supported = supports_temperature(model)
-    temperature = st.slider(
-        "温度（0=厳格 / 2=自由）",
-        0.0, 2.0, value=1.0, step=0.1,
-        disabled=not temp_supported,
-        help="GPT-5 系列は temperature=1 固定です",
-    )
-    if not temp_supported:
-        st.caption("ℹ️ GPT-5 系列は temperature を変更できません（=1固定）")
-
-    # 出力上限（modern専用）
-    max_completion_tokens = st.slider(
-        "最大出力トークン（目安）",
-        min_value=1000, max_value=120000, value=100000, step=500,
-        help="2万文字級の整形なら 8,000〜12,000 程度を推奨（本版はリトライなし）。",
-    )
-
-    st.subheader("通貨換算（任意）")
-    usd_jpy = st.number_input("USD/JPY", min_value=50.0, max_value=500.0, value=float(DEFAULT_USDJPY), step=0.5)
-
-    c1, c2 = st.columns(2)
-    run_btn = c1.button("話者分離して整形", type="primary", use_container_width=True)
-    push_btn = c2.button("➕ この結果を『② 議事録作成』へ渡す", use_container_width=True)
+    # 実行ボタンのみ
+    run_btn = st.button("話者分離して整形", type="primary", use_container_width=True)
 
 with right:
     st.subheader("入力テキスト")
-
-    # 自動取り込み通知（1回だけ）
-    if st.session_state.pop("from_transcribe_notice", False):
-        st.success("✅ 『文字起こし』ページからテキストを受け取りました。")
-
-    # 明示的に「文字起こしから再読み込み」するボタン
-    # reload_col, _ = st.columns([1, 3])
-    if st.button("↩ 文字起こしから再読み込み"):
-        if st.session_state.get("minutes_source_text"):
-            st.session_state["prep_source_text"] = st.session_state["minutes_source_text"]
-            st.toast("文字起こしテキストを再読み込みしました", icon="✅")
-        else:
-            st.toast("読み込める文字起こしテキストがありません", icon="⚠️")
 
     # .txt ドロップ → prep_source_text へ格納
     up = st.file_uploader("文字起こしテキスト（.txt）をドロップ", type=["txt"], accept_multiple_files=False)
@@ -161,20 +104,46 @@ with right:
             except Exception:
                 text_from_file = raw.decode(errors="ignore")
         st.session_state["prep_source_text"] = text_from_file
+        st.session_state["prep_input_filename"] = up.name  # 元ファイル名を保存
 
-    # テキストエリア（優先: prep_source_text → 次点: minutes_source_text → 空）
+    # テキストエリア（session_state["prep_source_text"] をそのまま使う）
     src = st.text_area(
         "文字起こしテキスト（貼り付け可）",
-        value=st.session_state.get("prep_source_text", st.session_state.get("minutes_source_text", "")),
         height=420,
-        placeholder="①ページの結果を引き継ぐか、ここに貼り付けるか、.txt をドロップしてください。",
-        key="prep_source_text_area",
+        placeholder="テキストをここに貼り付けるか、.txt をドロップしてください。",
+        key="prep_source_text",
+    )
+
+# ========================== サイドバー：モデル設定＋通貨 ==========================
+with st.sidebar:
+    st.subheader("モデル設定")
+    model = st.selectbox(
+        "モデル",
+        [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+        ],
+        index=1,  # デフォルト: gpt-5-mini
+    )
+
+    # ★ max_completion_tokens は 100000 固定（UI なし）
+    max_completion_tokens = 100000
+    # st.caption("最大出力トークン: 100,000（長文対応のため固定）")
+
+    st.subheader("通貨換算（任意）")
+    usd_jpy = st.number_input(
+        "USD/JPY",
+        min_value=50.0,
+        max_value=500.0,
+        value=float(DEFAULT_USDJPY),
+        step=0.5,
     )
 
 # ========================== 実行（リトライなし一発実行） ==========================
 if run_btn:
     # 直近のテキストエリア内容を最優先に使用
-    src = st.session_state.get("prep_source_text", st.session_state.get("minutes_source_text", ""))
+    src = st.session_state.get("prep_source_text", "")
 
     if not src.strip():
         st.warning("文字起こしテキストを入力してください。")
@@ -192,10 +161,8 @@ if run_btn:
                 model=model,
                 messages=[{"role": "user", "content": prompt_text}],
                 max_completion_tokens=int(out_tokens),
+                # temperature は送らない（GPT-5 系列は常に1固定）
             )
-            # GPT-5系は温度固定なので送らない。それ以外で1.0と違う時のみ送る。
-            if supports_temperature(model) and abs(temperature - 1.0) > 1e-9:
-                chat_kwargs["temperature"] = float(temperature)
             return client.chat.completions.create(**chat_kwargs)
 
         t0 = time.perf_counter()
@@ -224,6 +191,18 @@ if run_btn:
             # === ダウンロード & コピー ===
             import json
             base_filename = "speaker_prep_result"
+
+            # 元ファイル名がある場合はそれを付ける
+            input_name = st.session_state.get("prep_input_filename")
+            if input_name:
+                stem = input_name.rsplit(".", 1)[0]   # 拡張子を除いた部分
+                base_filename = f"speaker_prep_{stem}"
+
+            # 日時（JST）を追加
+            JST = dt.timezone(dt.timedelta(hours=9), "Asia/Tokyo")
+            now_str = dt.datetime.now(JST).strftime("%Y%m%d_%H%M%S")
+            base_filename = f"{base_filename}_{now_str}"
+
             txt_bytes = text.encode("utf-8")
 
             dl_col, cp_col = st.columns([1, 1], gap="small")
@@ -261,7 +240,6 @@ if run_btn:
                   }});
                 </script>
                 """, height=60)
-            # === 追加ここまで ===
 
         else:
             st.warning("⚠️ モデルから空の応答が返されました。レスポンス全体を表示します。")
@@ -296,24 +274,16 @@ if run_btn:
             except Exception as e:
                 st.write({"error": str(e)})
 
+        # 整形結果をセッションに保存（② 議事録作成ページから自動参照できるようにする）
         st.session_state["prep_last_output"] = text
-        st.session_state["minutes_source_text"] = text  # ② 議事録作成タブへ渡す用
-
-# ========================== 引き渡し（ボタン） ==========================
-if push_btn:
-    out = st.session_state.get("prep_last_output") or st.session_state.get("minutes_source_text", "")
-    if not out.strip():
-        st.warning("先に『話者分離して整形』を実行してください。")
-    else:
-        st.session_state["minutes_source_text"] = out
-        st.success("整形結果を『② 議事録作成』ページへ渡しました。左のナビから移動してください。")
+        st.session_state["minutes_source_text"] = text
 
 # ========================== ヘルプ ==========================
 with st.expander("⚠️ 長文入力（2万文字前後）の注意点"):
     st.markdown(
         """
-- 日本語2万文字は **約1万〜1.5万トークン**です。**gpt-4.1 系 / gpt-5 系**（128kコンテキスト）推奨。
-- **max_completion_tokens** は 8000〜12000 程度が安全です（本版はリトライなし。必要に応じて最初から十分大きく）。
+- 日本語2万文字は **約1万〜1.5万トークン**です。**gpt-5 系列 / gpt-4.1 系**（128kコンテキスト）推奨。
+- 本ページでは最大出力トークンを **100,000** に固定しています（長文議事録向け）。
 - 価格表は `config.MODEL_PRICES_USD`（USD/100万トークン）を運用価格に合わせて調整してください。
 """
     )

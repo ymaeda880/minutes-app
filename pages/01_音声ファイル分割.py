@@ -9,8 +9,8 @@ from pydub import AudioSegment
 
 from lib.explanation import render_audio_split_expander
 
-st.set_page_config(page_title="音声分割ツール（MP3/WAV・オーバーラップ）", page_icon="🎧", layout="centered")
-st.title("🎧 音声分割ツール（MP3/WAV・オーバーラップ付き）")
+st.set_page_config(page_title="音声分割ツール", page_icon="🎧", layout="centered")
+st.title("🎧 音声分割ツール")
 
 st.write(
     "アップロードした音声（MP3/WAV）を一定長さで分割し、隣接チャンクに重なり（オーバーラップ）をつけます。"
@@ -33,7 +33,10 @@ with st.sidebar:
     fade_ms = st.number_input("フェード（クリックノイズ低減, ms）", min_value=0, max_value=2000, value=0, step=100)
     min_tail_keep = st.checkbox("最後の“短すぎる尻尾”は前チャンクに吸収（重複を増やさない）", value=True)
 
-uploaded = st.file_uploader("音声ファイルをアップロード（MP3/WAV）", type=["mp3", "wav"])
+uploaded = st.file_uploader(
+    "音声ファイルをアップロード（MP3/WAV/MP4）",
+    type=["mp3", "wav", "mp4"]
+)
 
 def hhmmss(ms: int) -> str:
     return str(timedelta(milliseconds=ms)).split(".")[0]
@@ -85,11 +88,17 @@ if uploaded is not None:
     try:
         # 1) 読み込み
         suffix = Path(uploaded.name).suffix.lower()
-        if suffix not in {".mp3", ".wav"}:
-            st.error("対応していない拡張子です（.mp3 / .wav）。")
+        if suffix not in {".mp3", ".wav", ".mp4"}:
+            st.error("対応していない拡張子です（.mp3 / .wav / .mp4）。")
             st.stop()
 
-        load_fmt = "mp3" if suffix == ".mp3" else "wav"
+        if suffix == ".mp3":
+            load_fmt = "mp3"
+        elif suffix == ".wav":
+            load_fmt = "wav"
+        elif suffix == ".mp4":
+            load_fmt = "mp4"
+
         audio = AudioSegment.from_file(uploaded, format=load_fmt)
 
         # 2) パラメータ（ms）
@@ -122,74 +131,79 @@ if uploaded is not None:
                 )
             st.dataframe(rows, hide_index=True, use_container_width=True)
 
-            # 5) ZIP 作成（メモリ）
-            base_name = (uploaded.name.rsplit(".", 1)[0] or "audio").replace(" ", "_")
-            mem_zip = io.BytesIO()
+            # 5) 分割ファイル作成トリガー（ボタン）
+            st.write("※ プレビューを確認したら、下のボタンでZIPファイルを作成してください。")
+            if st.button("📦 分割済み音声ZIPを作成する"):
+                with st.spinner("分割済み音声をエクスポートして ZIP を作成しています…"):
+                    # ZIP 作成（メモリ）
+                    base_name = (uploaded.name.rsplit(".", 1)[0] or "audio").replace(" ", "_")
+                    mem_zip = io.BytesIO()
 
-            # 出力設定
-            if export_fmt.startswith("wav"):
-                out_ext = "wav"
-                export_kwargs = {"format": "wav"}  # 既定で PCM_s16le
-                bitrate_arg = None
-            else:
-                out_ext = "mp3"
-                bitrate_arg = None if "自動" in target_bitrate else target_bitrate
-                export_kwargs = {"format": "mp3"}
-                if bitrate_arg:
-                    export_kwargs["bitrate"] = bitrate_arg
+                    # 出力設定
+                    if export_fmt.startswith("wav"):
+                        out_ext = "wav"
+                        export_kwargs = {"format": "wav"}  # 既定で PCM_s16le
+                        bitrate_arg = None
+                    else:
+                        out_ext = "mp3"
+                        bitrate_arg = None if "自動" in target_bitrate else target_bitrate
+                        export_kwargs = {"format": "mp3"}
+                        if bitrate_arg:
+                            export_kwargs["bitrate"] = bitrate_arg
 
-            with zipfile.ZipFile(mem_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for i, p in enumerate(parts):
-                    start_tag = hhmmss(p["start_ms"]).replace(":", "")
-                    end_tag = hhmmss(p["end_ms"]).replace(":", "")
-                    filename = f"{base_name}_part{i:03d}_{start_tag}-{end_tag}.{out_ext}"
+                        # ZIP パック
+                    with zipfile.ZipFile(mem_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        for i, p in enumerate(parts):
+                            start_tag = hhmmss(p["start_ms"]).replace(":", "")
+                            end_tag = hhmmss(p["end_ms"]).replace(":", "")
+                            filename = f"{base_name}_part{i:03d}_{start_tag}-{end_tag}.{out_ext}"
 
-                    buf = io.BytesIO()
-                    p["segment"].export(buf, **export_kwargs)
-                    zf.writestr(filename, buf.getvalue())
+                            buf = io.BytesIO()
+                            p["segment"].export(buf, **export_kwargs)
+                            zf.writestr(filename, buf.getvalue())
 
-                # 透過用のインデックス（CSV）も同梱
-                import csv
-                index_csv = io.StringIO()
-                writer = csv.writer(index_csv)
-                writer.writerow(["part", "start_ms", "end_ms", "start_hhmmss", "end_hhmmss"])
-                for i, p in enumerate(parts):
-                    writer.writerow([i, p["start_ms"], p["end_ms"], hhmmss(p["start_ms"]), hhmmss(p["end_ms"])])
-                zf.writestr(f"{base_name}_index.csv", index_csv.getvalue().encode("utf-8"))
+                        # 透過用のインデックス（CSV）も同梱
+                        import csv
+                        index_csv = io.StringIO()
+                        writer = csv.writer(index_csv)
+                        writer.writerow(["part", "start_ms", "end_ms", "start_hhmmss", "end_hhmmss"])
+                        for i, p in enumerate(parts):
+                            writer.writerow([i, p["start_ms"], p["end_ms"],
+                                             hhmmss(p["start_ms"]), hhmmss(p["end_ms"])])
+                        zf.writestr(f"{base_name}_index.csv", index_csv.getvalue().encode("utf-8"))
 
-            mem_zip.seek(0)
-            st.download_button(
-                "📦 分割済み音声をZIPでダウンロード",
-                data=mem_zip,
-                file_name=f"{base_name}_split_overlap.zip",
-                mime="application/zip",
-                #mime="application/octet-stream",            # ← ここを変更
-                #key="zip_dl_button"
-            )
+                    mem_zip.seek(0)
 
-            # --- ⚠ 注意メッセージを表示 ---
-            st.warning(
-                """
-                「分割済み音声をZIPでダウンロード」ボタンを押してください．
+                # スピナー終了後にボタンとメッセージを表示
+                st.success(f"ZIPファイルを作成しました（チャンク数: {len(parts)}・総再生時間: {hhmmss(len(audio))}）。")
 
-                この際に，**ブラウザから「安全でないダウンロードがブロックされました」**
-                という警告が出る場合があります。
+                st.download_button(
+                    "⬇️ 分割済み音声をZIPでダウンロード",
+                    data=mem_zip,
+                    file_name=f"{base_name}_split_overlap.zip",
+                    mime="application/zip",
+                )
 
-                これはローカル環境（自己署名HTTPSやLAN内サーバー）でZIPファイルを配布する際に、
-                Chromeなどが自動的に安全確認を行うためです。
+                # --- ⚠ 注意メッセージを表示 ---
+                st.warning(
+                    """
+                    「分割済み音声をZIPでダウンロード」ボタンを押してください。
 
-                **ブロックされた場合は：** 
+                    この際に，**ブラウザから「安全でないダウンロードがブロックされました」**
+                    という警告が出る場合があります。
 
-                右上にブロックされたことを示す警告が出るので，保存クリックしてください．
-              
-                """,
-                icon="⚠️",
-            )
+                    これはローカル環境（自己署名HTTPSやLAN内サーバー）でZIPファイルを配布する際に、
+                    Chromeなどが自動的に安全確認を行うためです。
 
-            st.success(f"作成チャンク数: {len(parts)}  | 総再生時間: {hhmmss(len(audio))}")
+                    **ブロックされた場合は：**
+
+                    右上にブロックされたことを示す警告が出るので，保存をクリックしてください。
+                    """,
+                    icon="⚠️",
+                )
 
     except Exception as e:
         st.error(f"処理中にエラーが発生しました: {e}")
 
 else:
-    st.info("左の設定を選び、MP3 または WAV ファイルをアップロードしてください。")
+    st.info("左の設定を選び、MP3 / WAV / MP4 ファイルをアップロードしてください。")
