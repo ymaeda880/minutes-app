@@ -21,4 +21,5 @@ data/*.zip
 data/raw/*
 
 # log_minutes のログ
+*.log
 log_minutes.txt
