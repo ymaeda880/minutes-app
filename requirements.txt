@@ -11,3 +11,8 @@ pandas>=2.2.0        # 表形式出力（トークン/料金表示など）
 
 # gemini
 google-generativeai
+
+# login処理用
+extra-streamlit-components
+
+PyJWT

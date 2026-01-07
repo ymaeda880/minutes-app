@@ -1,6 +1,9 @@
+# -*- coding: utf-8 -*-
 # 07_議事録作成（新）.py
 # ------------------------------------------------------------
-# 📝 議事録作成（整形済みテキスト → 議事録）— modern専用・リトライなし版
+# 📝 議事録作成（整形済みテキスト → 議事録）
+# - OpenAI（modern / リトライなし）
+# - Gemini 対応（リトライなし）
 # ------------------------------------------------------------
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ PAGE_NAME = Path(__file__).stem
 SESSION_KEY_SOURCE = f"{PAGE_NAME}_source_text"
 # ★ ここまで追加
 
-# 1 回の呼び出しで許可する最大出力トークン数（固定）
+# 1 回の呼び出しで許可する最大出力トークン数（固定：OpenAI側）
 MAX_COMPLETION_TOKENS = 100000
 
 # ==== .docx 読み取り／書き出し（python-docx） ====
@@ -41,9 +44,17 @@ from lib.prompts import (
     get_group,
     build_prompt,
 )
-from lib.tokens import extract_tokens_from_response, debug_usage_snapshot  # modern専用
+from lib.tokens import extract_tokens_from_response, debug_usage_snapshot  # OpenAI modern専用
 from lib.costs import estimate_chat_cost_usd
-from config.config import DEFAULT_USDJPY
+
+from config.config import (
+    DEFAULT_USDJPY,
+    # Gemini keys / cost helpers（pages/21 と同じ流儀）
+    get_gemini_api_key,
+    has_gemini_api_key,
+    estimate_tokens_from_text,
+    estimate_gemini_cost_usd,
+)
 
 from lib.explanation import (
     render_minutes_maker_expander,
@@ -55,6 +66,9 @@ st.title("議事録作成 — 逐語録から正式議事録へ")
 render_minutes_maker_expander()          # 上：ページの使い方
 render_minutes_prompt_spec_expander()    # 下：プロンプト仕様の説明
 
+# --------------------------
+# OpenAI Key / Client
+# --------------------------
 OPENAI_API_KEY = (
     st.secrets.get("openai", {}).get("api_key")
     or st.secrets.get("OPENAI_API_KEY")
@@ -65,6 +79,12 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# --------------------------
+# Gemini Key
+# --------------------------
+GEMINI_ENABLED = has_gemini_api_key()
+GEMINI_API_KEY = get_gemini_api_key() if GEMINI_ENABLED else ""
+
 # ---- セッション初期化（表示が消えない用の保険）----
 # GPTの生出力（TXT 用）
 st.session_state.setdefault("minutes_raw_output", "")
@@ -73,9 +93,12 @@ st.session_state.setdefault("minutes_final_output", "")
 # ★ 入力テキスト（このページ専用）
 st.session_state.setdefault(SESSION_KEY_SOURCE, "")
 
+# モデル選択（OpenAI/Gemini混在）
+st.session_state.setdefault("minutes_model_last_valid", "gpt-5-mini")
+st.session_state.setdefault("minutes_model_picker", "gpt-5-mini")
+st.session_state.setdefault("minutes_gemini_disabled_notice", False)
 
 # ========================== 補助関数（横線の後処理） ==========================
-
 def apply_visual_mode(text: str, mode: str) -> str:
     """
     「見た目1：横線あり」→ 2つ目以降の # 見出しの前に必ず --- を追加
@@ -83,26 +106,21 @@ def apply_visual_mode(text: str, mode: str) -> str:
 
     ※ 見出しは「# 会議概要」「#会議概要」のどちらでも検出する。
     """
-    # st.write("DEBUG apply_visual_mode mode=", repr(mode))  # ★一時的
     lines = text.splitlines()
 
     # --- 見た目2：横線なし → 全削除 ---
     if mode.startswith("見た目2"):
-        return "\n".join(
-            [l for l in lines if l.strip() not in ("---", "―――", "ーーー")]
-        )
+        return "\n".join([l for l in lines if l.strip() not in ("---", "―――", "ーーー")])
 
     # --- 見た目1：横線あり ---
     new_lines: list[str] = []
     heading_count = 0
 
     # 「# 会議概要」「#会議概要」など、先頭が # で始まる行を第1階層見出しとみなす
-    heading_re = re.compile(r'^\s*#\s*')
+    heading_re = re.compile(r"^\s*#\s*")
 
     for line in lines:
-        # st.write("DEBUG line=", repr(line))  # ★一時的
         if heading_re.match(line):
-            # st.write("DEBUG re.match=", repr(line))  # ★一時的
             heading_count += 1
 
             # 2つ目以降の見出しは、前に横線を入れる
@@ -121,10 +139,16 @@ def apply_visual_mode(text: str, mode: str) -> str:
             new_lines.append(line)
             continue
 
-        # 見出し以外はそのまま入れる
         new_lines.append(line)
 
     return "\n".join(new_lines)
+
+
+def safe_filename(s: str) -> str:
+    bad = '\\/:*?"<>|'
+    for ch in bad:
+        s = s.replace(ch, "_")
+    return s
 
 
 # ========================== レイアウト（土台） ==========================
@@ -143,14 +167,10 @@ with left:
     mode_options = list(MINUTES_MANDATORY_MODES.keys())  # 例: ["逐語録", "簡易議事録", "詳細議事録"]
 
     if "minutes_mode" not in st.session_state:
-        # デフォルトは「簡易議事録」
         st.session_state["minutes_mode"] = "簡易議事録"
 
     if "minutes_mandatory" not in st.session_state:
-        # UI 上で編集するのは「モード別 mandatory」のみ
-        st.session_state["minutes_mandatory"] = MINUTES_MANDATORY_MODES[
-            st.session_state["minutes_mode"]
-        ]
+        st.session_state["minutes_mandatory"] = MINUTES_MANDATORY_MODES[st.session_state["minutes_mode"]]
 
     def _on_change_minutes_mode() -> None:
         """逐語録 / 簡易 / 詳細 の切り替え時に、モード別 mandatory を差し替える。"""
@@ -160,11 +180,10 @@ with left:
             MINUTES_MANDATORY_MODES["簡易議事録"],
         )
 
-    # --- 議事録の種類（内容） ---
     st.radio(
         "議事録の種類",
         options=mode_options,
-        key="minutes_mode",          # index は渡さない
+        key="minutes_mode",
         on_change=_on_change_minutes_mode,
         help="逐語録 / 簡易議事録 / 詳細議事録 を切り替えます。",
     )
@@ -181,15 +200,10 @@ with left:
     )
 
     # --- プリセットなどの初期化（内容側・複数選択対応） ---
-    # 選択されているプリセットキーのリスト
     if "minutes_selected_preset_keys" not in st.session_state:
         st.session_state["minutes_selected_preset_keys"] = []
-
-    # 選択プリセットを結合した本文（ユーザー編集可）
     if "minutes_preset_text" not in st.session_state:
         st.session_state["minutes_preset_text"] = ""
-
-    # 任意の追加指示
     if "minutes_extra_text" not in st.session_state:
         st.session_state["minutes_extra_text"] = ""
 
@@ -203,13 +217,10 @@ with left:
     # --- 追記プリセット（チェックボックスで複数選択 → 本文を自動結合） ---
     st.markdown("#### 追記プリセット（内容）")
 
-    # 前回選択されていたキー
     prev_selected_keys = st.session_state.get("minutes_selected_preset_keys", [])
 
-    # 今回の選択状態を集める
     current_selected_keys = []
     for preset in group.presets:
-        # 以前選ばれていたかどうかで初期値を決める
         default_checked = preset.key in prev_selected_keys
         checked = st.checkbox(
             preset.label,
@@ -219,27 +230,21 @@ with left:
         if checked:
             current_selected_keys.append(preset.key)
 
-    # 選択が変わったときだけ、結合テキストを再生成する
     if set(current_selected_keys) != set(prev_selected_keys):
         st.session_state["minutes_selected_preset_keys"] = current_selected_keys
         combined_body_parts = [
-            p.body
-            for p in group.presets
-            if p.key in current_selected_keys and p.body.strip()
+            p.body for p in group.presets if p.key in current_selected_keys and p.body.strip()
         ]
         st.session_state["minutes_preset_text"] = "\n\n".join(combined_body_parts).strip()
     else:
-        # 念のため現在の選択も保存（初回など）
         st.session_state["minutes_selected_preset_keys"] = current_selected_keys
 
-    # 選択されたプリセット本文（ここから自由に編集してOK）
     st.text_area(
         "（編集可）プリセット本文（内容）",
         height=120,
         key="minutes_preset_text",
     )
 
-    # 任意の追加指示
     st.text_area("追加指示（任意）", height=88, key="minutes_extra_text")
 
 # ========================== 右カラム：入力テキスト ==========================
@@ -253,7 +258,6 @@ with right:
     )
 
     if up is not None:
-        # 入力ファイル名を保持（出力ファイル名に使う）
         st.session_state["minutes_input_filename"] = up.name
 
         if up.name.lower().endswith(".docx"):
@@ -283,23 +287,49 @@ with right:
         "テキストはここに貼り付けてください。",
         value=st.session_state.get(SESSION_KEY_SOURCE, ""),
         height=460,
-        #placeholder="「③ 話者分離・整形（新）」の結果を流し込む想定です。",
     )
 
 # ========================== サイドバー：モデル設定＋通貨 ==========================
 with st.sidebar:
     st.subheader("モデル設定")
 
-    model = st.selectbox(
+    MODEL_OPTIONS = [
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gemini-2.0-flash",
+    ]
+
+    def model_label(x: str) -> str:
+        if x.startswith("gemini") and not GEMINI_ENABLED:
+            return f"{x}（GEMINI_API_KEY 未設定）"
+        return x
+
+    def on_change_minutes_model_picker() -> None:
+        picked = st.session_state.get("minutes_model_picker", "gpt-5-mini")
+        if picked.startswith("gemini") and not GEMINI_ENABLED:
+            st.session_state["minutes_gemini_disabled_notice"] = True
+            st.session_state["minutes_model_picker"] = st.session_state.get(
+                "minutes_model_last_valid", "gpt-5-mini"
+            )
+        else:
+            st.session_state["minutes_model_last_valid"] = picked
+            st.session_state["minutes_gemini_disabled_notice"] = False
+
+    st.selectbox(
         "モデル",
-        [
-            "gpt-5-mini",
-            "gpt-5-nano",
-        ],
-        index=0,
+        options=MODEL_OPTIONS,
+        key="minutes_model_picker",
+        format_func=model_label,
+        on_change=on_change_minutes_model_picker,
     )
 
-    st.caption("ℹ️ GPT-5 系列は temperature=1 固定・最大出力トークンは 100,000 固定です。")
+    if st.session_state.get("minutes_gemini_disabled_notice", False) and not GEMINI_ENABLED:
+        st.warning("GEMINI_API_KEY が未設定のため、Gemini は選択できません。")
+
+    model = st.session_state["minutes_model_picker"]
+    USE_GEMINI = str(model).startswith("gemini")
+
+    st.caption("ℹ️ OpenAI: max_completion_tokens=100,000 固定（modern）。Gemini: リトライなしで単発生成。")
 
     st.subheader("通貨換算（任意）")
     usd_jpy = st.number_input(
@@ -311,35 +341,29 @@ with st.sidebar:
     )
 
 # 実行ボタン（メイン側）
-run_btn = st.button("📝 議事録を生成", type="primary", use_container_width=True)
+# ※ 康男さん方針：use_container_width は使わない
+run_btn = st.button("📝 議事録を生成", type="primary")
 
 # ========================== 実行（モデル呼び出し：リトライなし） ==========================
 if run_btn:
-    # テキストエリアの内容を session に反映（貼り付けだけの場合も含めて）
     st.session_state[SESSION_KEY_SOURCE] = src
+
     if not src.strip():
         st.warning("整形済みテキストを入力してください。")
     else:
-        # --- 見た目スタイルの本文を取得 ---
-        # 現状、MINUTES_STYLE_PRESETS は GPT には影響しない前提だが、
-        # 将来の拡張を見据えて枠だけ残しておく。
+        # --- 見た目スタイルの本文を取得（現状は GPT に送らない想定だが枠は保持） ---
         style_body = ""
         if style_group.presets:
             style_body = style_group.presets[0].body or ""
 
-        # --- 内容プリセット + 見た目スタイル を合体 ---
         base_preset = st.session_state.get("minutes_preset_text", "") or ""
         if style_body:
-            merged_preset = (
-                base_preset.strip()
-                + "\n\n【見た目のスタイル指示】\n"
-                + style_body.strip()
-            )
+            merged_preset = base_preset.strip() + "\n\n【見た目のスタイル指示】\n" + style_body.strip()
         else:
             merged_preset = base_preset
 
         # --- 共通 mandatory + モード別 mandatory を連結 ---
-        mode_specific = st.session_state.get("minutes_mandatory", "").strip()
+        mode_specific = (st.session_state.get("minutes_mandatory", "") or "").strip()
         if mode_specific:
             mandatory_all = MINUTES_GLOBAL_MANDATORY + "\n\n" + mode_specific
         else:
@@ -347,13 +371,14 @@ if run_btn:
 
         # --- プロンプト組み立て ---
         combined = build_prompt(
-            mandatory_all,                               # 共通＋モード別 mandatory
-            merged_preset,                               # 内容プリセット + 見た目スタイル
-            st.session_state["minutes_extra_text"],      # 任意の追加指示
+            mandatory_all,
+            merged_preset,
+            st.session_state.get("minutes_extra_text", ""),
             src,
         )
 
-        def call_once(prompt_text: str):
+        # --------- 呼び出し関数（OpenAI / Gemini）---------
+        def call_once_openai(prompt_text: str):
             chat_kwargs: Dict[str, Any] = dict(
                 model=model,
                 messages=[{"role": "user", "content": prompt_text}],
@@ -362,21 +387,39 @@ if run_btn:
             # GPT-5 系列は temperature=1 固定なので設定しない
             return client.chat.completions.create(**chat_kwargs)
 
+        def call_once_gemini(prompt_text: str):
+            import google.generativeai as genai
+
+            genai.configure(api_key=GEMINI_API_KEY)
+            gm = genai.GenerativeModel(model)
+
+            # 議事録は長文になりがち：エラー時はUI側で通知（リトライなし）
+            return gm.generate_content(prompt_text)
+
+        # --------- 実行 ---------
         t0 = time.perf_counter()
         with st.spinner("議事録を生成中…"):
-            resp = call_once(combined)
+            if USE_GEMINI:
+                if not GEMINI_ENABLED:
+                    st.error("GEMINI_API_KEY が未設定のため、Gemini は利用できません。")
+                    st.stop()
+                resp = call_once_gemini(combined)
+                text = getattr(resp, "text", "") or ""
+                finish_reason = None
+            else:
+                resp = call_once_openai(combined)
 
-            text = ""
-            finish_reason = None
-            if resp and getattr(resp, "choices", None):
-                try:
-                    text = resp.choices[0].message.content or ""
-                except Exception:
-                    text = getattr(resp.choices[0], "text", "")
-                try:
-                    finish_reason = resp.choices[0].finish_reason
-                except Exception:
-                    finish_reason = None
+                text = ""
+                finish_reason = None
+                if resp and getattr(resp, "choices", None):
+                    try:
+                        text = resp.choices[0].message.content or ""
+                    except Exception:
+                        text = getattr(resp.choices[0], "text", "")
+                    try:
+                        finish_reason = resp.choices[0].finish_reason
+                    except Exception:
+                        finish_reason = None
 
         elapsed = time.perf_counter() - t0
 
@@ -384,59 +427,71 @@ if run_btn:
             # 生のモデル出力を保存（TXT 用）
             st.session_state["minutes_raw_output"] = text
 
-            # 横線スタイルの後処理をここで適用（画面・docx 用）
+            # 横線スタイルの後処理（画面・docx 用）
             visual_mode = st.session_state.get("minutes_visual_mode", "見た目1：横線あり")
-            # st.write("DEBUG visual_mode:", visual_mode)  # 一時的に表示
             processed_text = apply_visual_mode(text, visual_mode)
-
             st.session_state["minutes_final_output"] = processed_text
 
-            if finish_reason == "length":
+            if (not USE_GEMINI) and (finish_reason == "length"):
                 st.info(
                     "finish_reason=length: 出力が上限（100,000トークン）で切れています。"
-                    " 必要に応じて入力テキストを分割するなどしてください。"
+                    " 必要に応じて入力テキストを分割してください。"
                 )
         else:
             st.warning("⚠️ モデルから空の応答が返されました。レスポンス全体を表示します。")
-            try:
-                st.json(resp.model_dump())
-            except Exception:
-                st.write(resp)
+            if USE_GEMINI:
+                try:
+                    # Geminiレスポンスは dict ではないので簡易表示
+                    st.write(resp)
+                except Exception:
+                    st.write("Gemini response display failed.")
+            else:
+                try:
+                    st.json(resp.model_dump())
+                except Exception:
+                    st.write(resp)
 
+        # --------- メトリクス（OpenAIはusage、Geminiは推定）---------
         if "resp" in locals():
-            input_tok, output_tok, total_tok = extract_tokens_from_response(resp)
-            usd = estimate_chat_cost_usd(model, input_tok, output_tok)
-            jpy = (usd * usd_jpy) if usd is not None else None
+            if USE_GEMINI:
+                output_tok = estimate_tokens_from_text(text or "")
+                input_tok = estimate_tokens_from_text(combined or "")
+                total_tok = (input_tok or 0) + (output_tok or 0)
+
+                usd = estimate_gemini_cost_usd(
+                    model=model,
+                    input_tokens=int(input_tok or 0),
+                    output_tokens=int(output_tok or 0),
+                )
+                jpy = (usd * usd_jpy) if usd is not None else None
+                note = "Geminiは推定tokens/単価表による概算"
+            else:
+                input_tok, output_tok, total_tok = extract_tokens_from_response(resp)
+                usd = estimate_chat_cost_usd(model, input_tok, output_tok)
+                jpy = (usd * usd_jpy) if usd is not None else None
+                note = "OpenAIはusageから算出"
 
             metrics_data = {
                 "処理時間": [f"{elapsed:.2f} 秒"],
-                "入力トークン": [f"{input_tok:,}"],
-                "出力トークン": [f"{output_tok:,}"],
-                "合計トークン": [f"{total_tok:,}"],
-                "概算 (USD/JPY)": [
-                    f"${usd:,.6f} / ¥{jpy:,.2f}" if usd is not None else "—"
-                ],
+                "入力トークン": [f"{input_tok:,}" if input_tok is not None else "—"],
+                "出力トークン": [f"{output_tok:,}" if output_tok is not None else "—"],
+                "合計トークン": [f"{total_tok:,}" if total_tok is not None else "—"],
+                "概算 (USD/JPY)": [f"${usd:,.6f} / ¥{jpy:,.2f}" if usd is not None else "—"],
+                "備考": [note],
             }
             st.subheader("トークンと料金の概要")
             st.table(pd.DataFrame(metrics_data))
 
-            with st.expander("🔍 トークン算出の内訳（modern usage スナップショット）"):
-                try:
-                    st.write(debug_usage_snapshot(getattr(resp, "usage", None)))
-                except Exception as e:
-                    st.write({"error": str(e)})
+            if (not USE_GEMINI):
+                with st.expander("🔍 トークン算出の内訳（modern usage スナップショット）"):
+                    try:
+                        st.write(debug_usage_snapshot(getattr(resp, "usage", None)))
+                    except Exception as e:
+                        st.write({"error": str(e)})
 
 # ========================== 生成結果の表示 ＆ ダウンロード ==========================
 raw_text = (st.session_state.get("minutes_raw_output") or "").strip()
 final_text = (st.session_state.get("minutes_final_output") or "").strip()
-
-
-def safe_filename(s: str) -> str:
-    bad = '\\/:*?"<>|'
-    for ch in bad:
-        s = s.replace(ch, "_")
-    return s
-
 
 if final_text:
     st.markdown("### 📝 生成結果（Markdown 表示）")
@@ -444,18 +499,14 @@ if final_text:
 
     st.subheader("📥 議事録の保存")
 
-    # 入力ファイル名（stem）を取得（なければ "minutes"）
     input_name = st.session_state.get("minutes_input_filename", "")
     input_stem = safe_filename(Path(input_name).stem) if input_name else "minutes"
-
-    # 日時：YYYYMMDD_HHMM
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
-    # --- TXT 保存（GPTの生出力を優先） ---
-    # モード（逐語録 / 簡易議事録 / 詳細議事録）をファイル名に反映
     mode_label_for_name = st.session_state.get("minutes_mode", "議事録")
     safe_label = safe_filename(mode_label_for_name)
 
+    # --- TXT 保存（生出力優先） ---
     base_for_txt = raw_text or final_text
     txt_bytes = base_for_txt.encode("utf-8")
     st.download_button(
@@ -463,7 +514,6 @@ if final_text:
         data=txt_bytes,
         file_name=f"{input_stem}_{safe_label}_{timestamp}.txt",
         mime="text/plain",
-        use_container_width=True,
         key="dl_txt_minutes",
     )
 
@@ -472,11 +522,10 @@ if final_text:
         try:
             mode_label = st.session_state.get("minutes_mode", "議事録")
             visual_label = st.session_state.get("minutes_visual_mode", "")
-            extra_prompt = st.session_state.get("minutes_extra_text", "").strip()
-            used_model = model
+            extra_prompt = (st.session_state.get("minutes_extra_text", "") or "").strip()
+            used_model = st.session_state.get("minutes_model_picker", "—")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-            # メタ情報ブロックを生成
             meta_info_lines = [
                 "【生成メタ情報】",
                 f"- 作成日時：{now_str}",
@@ -485,11 +534,9 @@ if final_text:
                 f"- 見た目のスタイル：{visual_label}",
             ]
 
-            # 追記プリセット（内容）の選択状況をメタ情報に追加
-            minutes_group = get_group(MINUTES_MAKER)  # lib.prompts から
+            minutes_group = get_group(MINUTES_MAKER)
             selected_keys = st.session_state.get("minutes_selected_preset_keys", [])
 
-            # key → label の対応表
             label_by_key = {p.key: p.label for p in minutes_group.presets}
             selected_labels = [label_by_key[k] for k in selected_keys if k in label_by_key]
 
@@ -500,7 +547,6 @@ if final_text:
             else:
                 meta_info_lines.append("- 追記プリセット（内容）：なし")
 
-
             if extra_prompt:
                 meta_info_lines.append("- 追加指示：")
                 meta_info_lines.append("    " + extra_prompt.replace("\n", "\n    "))
@@ -508,11 +554,8 @@ if final_text:
                 meta_info_lines.append("- 追加指示：なし")
 
             meta_info = "\n".join(meta_info_lines) + "\n\n"
-
-            # final_text の先頭に挿入
             final_text_with_meta = meta_info + final_text
 
-            # Word 出力生成（★ docx_minutes_export 側で Markdown 表 → Word表 に変換）
             docx_buffer = build_minutes_docx(final_text_with_meta)
 
             st.download_button(
@@ -520,7 +563,6 @@ if final_text:
                 data=docx_buffer,
                 file_name=f"{input_stem}_{safe_label}_{timestamp}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
                 key="dl_docx_minutes",
             )
         except Exception as e:
