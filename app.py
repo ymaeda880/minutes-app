@@ -4,10 +4,60 @@ from config.config import get_openai_api_key, DEFAULT_USDJPY
 from ui.sidebar import init_metrics_state, render_sidebar
 from ui.style import hide_anchor_links
 
+
+# ============================================================
+# パスの取得とcommon_lib読み込み（app.pyにおけるコード）
+# ============================================================
+from pathlib import Path
+import sys
+import streamlit as st
+
+_THIS = Path(__file__).resolve()
+APP_ROOT = _THIS.parent
+APP_NAME = APP_ROOT.name                  # ← app_name を自動取得
+PROJECTS_ROOT = _THIS.parents[2]
+
+if str(PROJECTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECTS_ROOT))
+
+from common_lib.sessions import SessionConfig, init_session, heartbeat_tick
+from common_lib.auth.auth_helpers import require_login
+
+
+
 st.set_page_config(page_title="議事録作成アプリ", layout="wide")
 # 鎖アイコンを非表示にする
-hide_anchor_links()
-st.title("🎛️ 議事録作成アプリ（Minutes Maker）")
+#hide_anchor_links()
+#st.title("🎛️ 議事録作成アプリ（Minutes Maker）")
+
+# ============================================================
+# Session heartbeat（全ページ共通・app.py）
+# ============================================================
+SESSIONS_DB = (
+    PROJECTS_ROOT / "Storages" / "_admin" / "sessions" / "sessions.db"
+)
+CFG = SessionConfig()  # heartbeat=30s, TTL=120s（既定）
+
+# ───────────────── ログイン必須 ─────────────────
+
+sub = require_login(st)
+if not sub:
+    st.stop()
+
+# ───────────────── ヘッダ ─────────────────
+left, right = st.columns([2, 1])
+with left:
+    st.title("🎛️ 議事録作成アプリ（Minutes Maker）")
+with right:
+    st.success(f"✅ ログイン中: **{sub}**")
+
+user = sub
+
+# ───────────────── sessions（初期化 + heartbeat） ─────────────────
+init_session(db_path=SESSIONS_DB, cfg=CFG, user_sub=user, app_name=APP_NAME)
+heartbeat_tick(db_path=SESSIONS_DB, cfg=CFG, user_sub=user, app_name=APP_NAME)
+
+
 
 # 初期化
 init_metrics_state()
@@ -18,8 +68,8 @@ if "usd_jpy" not in st.session_state:
 OPENAI_API_KEY = get_openai_api_key()
 if not OPENAI_API_KEY:
     st.error("OPENAI_API_KEY が .streamlit/secrets.toml に設定されていません。")
-else:
-    st.success("OPENAI_API_KEY が設定されています。")
+#else:
+    #st.success("OPENAI_API_KEY が設定されています。")
 
 st.markdown(
     """
