@@ -10,7 +10,8 @@ python-docx>=1.0.0   # Wordファイル入力対応
 pandas>=2.2.0        # 表形式出力（トークン/料金表示など）
 
 # gemini
-google-generativeai
+#google-generativeai
+google-genai
 
 # login処理用
 extra-streamlit-components

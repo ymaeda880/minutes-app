@@ -372,13 +372,6 @@ def render_speaker_prep_expander() -> None:
 #
 ###############
 
-# minutes_help_fixed.txt
-##############
-#
-# 議事録作成
-#
-###############
-
 # ============================================================
 # ✅ Minutes Maker: expander を作らない「中身だけ」版
 # ============================================================
@@ -660,6 +653,19 @@ def render_minutes_prompt_spec_help_content() -> None:
     )
 
 
+
+def _render_minutes_prompt_spec_help_content() -> None:
+    """
+    「GPTに送るプロンプト原文」説明の“中身だけ”を描画する（expanderは作らない）
+    """
+    st.markdown(
+        """
+            （ここに、康男さんが貼ってくれた render_minutes_prompt_spec_expander の
+            st.markdown("""...""") の中身全文を、そのまま移植してください）
+        """
+    )
+
+
 def render_minutes_help_expander_tabs() -> None:
     """
     ✅ 公開API（wrapperなし）
@@ -672,11 +678,10 @@ def render_minutes_help_expander_tabs() -> None:
         )
 
         with tab_usage:
-            render_minutes_maker_help_content()
+            _render_minutes_maker_help_content()
 
         with tab_prompt:
-            render_minutes_prompt_spec_help_content()
-
+            _render_minutes_prompt_spec_help_content()
 
             
 # ============================================================

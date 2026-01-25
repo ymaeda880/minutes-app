@@ -1,42 +1,72 @@
 # -*- coding: utf-8 -*-
 # pages/30_重複箇所検出_storage対応.py
+# ============================================================
+# 🧩 重複箇所検出（ストレージ対応 / 非AI / セッション記録のみ）
 #
-# ✅ storage対応版（ログイン必須）
-# - ログイン確認（pages/13 と同じ）
-# - Storages/<user>/minutes_app/ 配下の「連結文字起こし（combined txt）」を列挙
+# 目的：
+# - Storages/<user>/minutes_app/ 配下の「連結テキスト（combined txt）」を列挙
 # - radio で 1つ選択 → 重複検出（前半側にだけ BEGIN_TAG を挿入）
-# - 結果（merged txt）＋検出ログ（json）を transcript/ に保存
+# - 結果（marked txt）＋検出ログ（json）を transcript_marked/ に保存
 #
-# ※ common_lib は改変しない
-# ※ use_container_width は使わない（方針に従う）
+# 方針：
+# - AI は一切使わない（busy / 実行時間測定は不要）
+# - st.form は使わない
+# - use_container_width は使わない
+# - ログイン判定の正本は page_session_heartbeat
+# ============================================================
 
 from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
-import sys
 
 import streamlit as st
 
+from lib.explanation import render_overlap_detect_storage_expander
+
+# ============================================================
+# sys.path（common_lib を import できるように）
+# ============================================================
 _THIS = Path(__file__).resolve()
-PROJECTS_ROOT = _THIS.parents[3]
+APP_DIR = _THIS.parents[1]
+PROJ_DIR = _THIS.parents[2]
+MONO_ROOT = _THIS.parents[3]
 
-if str(PROJECTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECTS_ROOT))
+for p in (MONO_ROOT, PROJ_DIR, APP_DIR):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
+PROJECTS_ROOT = MONO_ROOT
+APP_NAME = _THIS.parents[1].name
+PAGE_NAME = _THIS.stem
+
+# ============================================================
+# common_lib（正本）
+# ============================================================
+from common_lib.sessions.page_entry import page_session_heartbeat
+from common_lib.ui.ui_basics import subtitle
+from common_lib.ui.banner_lines import render_banner_line_by_key
 from common_lib.storage.external_ssd_root import resolve_storage_subdir_root
-from common_lib.auth.auth_helpers import require_login
+
+# ============================================================
+# session_state keys：ページ単位で名前空間化（他ページ汚染防止）
+# ============================================================
+PAGE_KEY_PREFIX = _THIS.stem  # e.g. "30_重複箇所検出_storage対応"
+
+
+def k(name: str) -> str:
+    return f"{PAGE_KEY_PREFIX}::{name}"
 
 
 # ============================================================
 # 設定値（既存）
 # ============================================================
-
 OVERLAP_CHARS = 700
 HEAD_CHARS = 400
 HEAD_SENTENCES = 3
@@ -50,7 +80,6 @@ MARKER_PATTERN = re.compile(
 
 BEGIN_TAG = "-----ここから重複-----"
 
-
 # ============================================================
 # paths（PROJECTS_ROOT 基準）
 # ============================================================
@@ -58,7 +87,6 @@ STORAGE_ROOT = resolve_storage_subdir_root(
     PROJECTS_ROOT,
     subdir="Storages",
 )
-
 
 # ============================================================
 # utils
@@ -125,6 +153,28 @@ def _read_job_json(job_dir: Path) -> dict:
     except Exception:
         return {}
 
+def get_base_from_original(job_dir: Path) -> tuple[str, str]:
+    """
+    job_dir/original/ の先頭ファイル名を表示用に拾う。
+    - original_name: 元ファイル名（例: sample.wav）
+    - base_stem: 拡張子を除いたベース名（例: sample）
+    ない場合は ("none", "none") を返す。
+    """
+    original_dir = job_dir / "original"
+    if not original_dir.exists():
+        return "none", "none"
+
+    files = [p for p in original_dir.iterdir() if p.is_file()]
+    if not files:
+        return "none", "none"
+
+    # 安定化：名前順で先頭を採用
+    files_sorted = sorted(files, key=lambda p: p.name.lower())
+    p0 = files_sorted[0]
+    return p0.stem, p0.name
+
+
+
 def list_combined_texts(user_dir: str) -> list[CombinedItem]:
     base = STORAGE_ROOT / user_dir / "minutes_app"
     if not base.exists():
@@ -147,7 +197,6 @@ def list_combined_texts(user_dir: str) -> list[CombinedItem]:
             date = str(meta.get("date") or day_dir.name)
             created_at = meta.get("created_at")
 
-            # 入力元：transcript_speaker_separated_combined
             combined_dir = job_dir / "transcript_speaker_separated_combined"
             if not combined_dir.exists():
                 continue
@@ -158,7 +207,15 @@ def list_combined_texts(user_dir: str) -> list[CombinedItem]:
                 reverse=True,
             )
             for p in combined_files:
-                label = f"{date} / {job_id} / {p.name} / created={_human_dt(created_at)}"
+                #label = f"{date} / {job_id} / {p.name} / created={_human_dt(created_at)}"
+
+                base_stem, original_name = get_base_from_original(job_dir)
+                label = (
+                    f"{date} / {job_id} / {p.name}\n"
+                    f"  └ original: {original_name}\n"
+                    f"  └ base: {base_stem} / created={_human_dt(created_at)}"
+                )
+
                 items.append(
                     CombinedItem(
                         label=label,
@@ -172,7 +229,6 @@ def list_combined_texts(user_dir: str) -> list[CombinedItem]:
                 )
 
     return items
-
 
 
 # ============================================================
@@ -196,17 +252,17 @@ def split_by_markers(text: str) -> Tuple[List[str], List[Dict[str, str]]]:
 # ============================================================
 # 「後半の最初の数行」を抜き出す（既存）
 # ============================================================
-# === 追加：話者ラベル（行頭）除去 ===
 SPEAKER_PREFIX_PATTERN = re.compile(
     r"""^(
-        \s*                                   # 先頭空白
-        (?:司会|ＭＣ|MC|進行)                  # 日本語/MC系ラベル（必要なら増やす）
-        \s*[:：]\s*                            # コロン
+        \s*
+        (?:司会|ＭＣ|MC|進行)
+        \s*[:：]\s*
       |
-        \s*\[?\s*[sS]\s*\d+\s*\]?\s*[:：]\s*   # S12: / [s12]: / S 12 :
+        \s*\[?\s*[sS]\s*\d+\s*\]?\s*[:：]\s*
     )""",
     re.VERBOSE,
 )
+
 
 def strip_leading_speaker_labels(text: str) -> str:
     """
@@ -216,12 +272,11 @@ def strip_leading_speaker_labels(text: str) -> str:
     if not text:
         return ""
     s = text.lstrip("\ufeff")  # 念のためBOM除去
-    # 先頭行に連続で付く場合を考慮してループ
-    for _ in range(5):  # 無限ループ防止
+    for _ in range(5):
         m = SPEAKER_PREFIX_PATTERN.match(s)
         if not m:
             break
-        s = s[m.end():]
+        s = s[m.end() :]
     return s
 
 
@@ -229,7 +284,6 @@ def extract_head_phrase(next_seg: str) -> str:
     if not next_seg:
         return ""
 
-    # ★ 追加：先頭の話者ラベルを剥がしてからキー文を作る
     next_seg = strip_leading_speaker_labels(next_seg)
 
     s = next_seg[:HEAD_CHARS]
@@ -244,7 +298,6 @@ def extract_head_phrase(next_seg: str) -> str:
                 break
 
     return s[:end]
-
 
 
 # ============================================================
@@ -434,39 +487,92 @@ def build_merged_text(
 
 
 # ============================================================
-# Streamlit UI（storage対応）
+# ページ設定（必須・統一）
 # ============================================================
 st.set_page_config(
-    page_title="📝 重複箇所検出（storage対応）",
+    page_title="重複箇所検出（storage対応）",
     page_icon="📝",
     layout="wide",
 )
 
-sub = require_login(st)
-if not sub:
-    st.stop()
-left, right = st.columns([2, 1])
-with left:
-    st.title("📝 重複箇所検出（ストレージ対応）")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
-current_user=sub
+# バナー（指定）
+render_banner_line_by_key("light_green")
 
-
-st.markdown(
-    """
-- **ログイン必須**（Cookie/JWT）。
-- Storages 内の **話者分離後の連結（transcript_speaker_separated_combined/*.txt）** を選択して処理します。
-- 各つなぎ目で、後半セグメントの「最初の数行」をキーに前半末尾から一致位置を探し、
-  **前半側にだけ** `-----ここから重複-----` を挿入します。
-"""
+# ============================================================
+# セッション記録（ログイン判定の正本）
+# ============================================================
+sub = page_session_heartbeat(
+    st,
+    PROJECTS_ROOT,
+    app_name=APP_NAME,
+    page_name=PAGE_NAME,
 )
 
+if not sub:
+    st.warning("ログインしていません。ポータルからログインしてください。")
+    st.stop()
+
+left, right = st.columns([2, 1])
+with left:
+    st.title("📝 重複箇所検出")
+with right:
+    st.success(f"✅ ログイン中: **{sub}**")
+
+subtitle("ストレージ対応")
+st.caption("連結テキストの「つなぎ目」重複を検出し、前半側に BEGIN_TAG を挿入して保存します。")
+
+render_overlap_detect_storage_expander()
+
+current_user = sub
 user_dir = _sanitize_username_for_path(str(current_user))
 
-# =========================
+# ============================================================
+# セッションキー（結果保持）
+# ============================================================
+K_LAST_RESULT = f"{PAGE_NAME}__last_result"
+st.session_state.setdefault(K_LAST_RESULT, None)
+
+# ============================================================
+# 入力
+# ============================================================
+st.subheader("入力")
+
+input_mode = st.radio(
+    "どこから combined txt を読み込むか",
+    options=[
+        "既存（storage から選択）",
+        "新規アップロード（drop → 新規job作成 → combined 保存）",
+    ],
+    index=0,
+    key=k("input_mode"),
+)
+
+# drop用 state
+K_UP_LAST_SIG = k("upload_last_sig")
+K_UP_JOB_ID = k("upload_job_id")
+K_UP_JOB_ROOT = k("upload_job_root")
+K_UP_LOCKED = k("upload_job_locked")
+
+st.session_state.setdefault(K_UP_LAST_SIG, None)
+st.session_state.setdefault(K_UP_JOB_ID, None)
+st.session_state.setdefault(K_UP_JOB_ROOT, None)
+st.session_state.setdefault(K_UP_LOCKED, False)
+
+
+def now_job_id() -> str:
+    return "job_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def safe_filename(name: str) -> str:
+    s = (name or "text").strip()
+    s = s.replace("\\", "_").replace("/", "_").replace(":", "_")
+    s = re.sub(r"\s+", " ", s)
+    return s or "text"
+
+
+# ============================================================
 # Sidebar params
-# =========================
+# ============================================================
 with st.sidebar:
     st.header("検出パラメータ")
 
@@ -488,58 +594,200 @@ with st.sidebar:
     use_autojunk = autojunk_option.startswith("ON")
 
     st.divider()
-    st.caption("保存先は、選択ジョブの transcript/ です。")
+    st.caption("保存先は、選択ジョブの transcript_marked/ です。")
 
-# =========================
-# combined txt selection
-# =========================
-items = list_combined_texts(user_dir)
-if not items:
-    st.info(
-        "Storages に連結文字起こし（transcripts_combined_*.txt）が見つかりません。\n\n"
-        "先に「文字起こし（storage対応）」で transcript を作成してください。"
-    )
-    st.stop()
 
-labels = [it.label for it in items]
-picked = st.radio("処理対象（combined txt）", options=labels, index=0)
-it = items[labels.index(picked)]
+# ============================================================
+# combined txt selection（既存 / drop 両対応）
+# ============================================================
+items: list[CombinedItem] = []
 
-st.caption(f"選択ファイル: {it.path}")
-
-with st.expander("📌 選択ジョブ情報", expanded=False):
-    st.write(
-        {
-            "job_dir": str(it.job_dir),
-            "transcript_dir": str(it.transcript_dir),
-            "job_id": it.job_id,
-            "date": it.date,
-            "created_at": it.created_at,
-        }
+if input_mode.startswith("既存"):
+    items = list_combined_texts(user_dir)
+    if not items:
+        st.info(
+            "Storages に連結テキスト（combined txt）が見つかりません。\n\n"
+            "先に「話者分離（storage対応）」で combined を作成してください。"
+        )
+else:
+    st.markdown("### 新規アップロード（drop）")
+    uploaded = st.file_uploader(
+        "連結テキスト（.txt）をドロップ/選択（1つ以上）",
+        type=["txt"],
+        accept_multiple_files=True,
+        key=k("uploader_combined_txt"),
     )
 
-run = st.button("▶️ 重複箇所検出を実行する", type="primary")
+    if uploaded:
+        sig_parts = [f"{getattr(f, 'name', 'file')}:{getattr(f, 'size', 0)}" for f in uploaded]
+        upload_sig = "|".join(sig_parts)
+
+        # ファイルセットが変わったら「未確定」に戻す
+        if st.session_state.get(K_UP_LAST_SIG) != upload_sig:
+            st.session_state[K_UP_LAST_SIG] = upload_sig
+            st.session_state[K_UP_JOB_ID] = None
+            st.session_state[K_UP_JOB_ROOT] = None
+
+        st.caption("※ まずは『保存して新規ジョブ作成』で確定してください。")
+
+        existing_job_root = st.session_state.get(K_UP_JOB_ROOT)
+        existing_job_id = st.session_state.get(K_UP_JOB_ID)
+
+        if existing_job_root and existing_job_id and st.session_state.get(K_UP_LAST_SIG) == upload_sig:
+            job_root = Path(existing_job_root)
+            st.success(f"✅ 作成済みジョブを復元しました: {job_root}")
+
+        if not (existing_job_root and existing_job_id and st.session_state.get(K_UP_LAST_SIG) == upload_sig):
+            create_job_clicked = st.button(
+                "📦 アップロードを combined として保存して新規ジョブを作成",
+                type="primary",
+                key=k("create_job_btn"),
+                disabled=bool(st.session_state.get(K_UP_LOCKED, False)),
+                help="押した時点で Storages に job_YYYYMMDD_HHMMSS を作り、transcript_speaker_separated_combined/ に保存します。",
+            )
+
+            if create_job_clicked:
+                st.session_state[K_UP_LOCKED] = True
+                try:
+                    with st.spinner("新規ジョブを作成して combined を保存しています…"):
+                        today_dir = datetime.now().strftime("%Y-%m-%d")
+                        job_id = now_job_id()
+                        job_root = STORAGE_ROOT / user_dir / "minutes_app" / today_dir / job_id
+
+                        combined_dir = job_root / "transcript_speaker_separated_combined"
+                        logs_dir = job_root / "logs"
+                        safe_mkdir(combined_dir)
+                        safe_mkdir(logs_dir)
+
+                        log_path = logs_dir / "process.log"
+                        append_log(log_path, "UPLOAD(COMBINED)->JOB START")
+                        append_log(log_path, f"job_dir={job_root}")
+
+                        saved: list[dict[str, Any]] = []
+                        for i, uf in enumerate(uploaded, start=1):
+                            name = safe_filename(getattr(uf, "name", f"combined_{i}.txt"))
+                            out_name = f"{i:03d}_{name}"
+                            out_path = combined_dir / out_name
+                            b = uf.getvalue()
+                            try:
+                                text = b.decode("utf-8")
+                            except UnicodeDecodeError:
+                                text = b.decode("cp932", errors="ignore")
+                            write_text(out_path, text)
+                            saved.append({"order": i, "original_name": name, "saved_name": out_name})
+                            append_log(log_path, f"saved combined -> {out_name}")
+
+                        job_json = {
+                            "job_id": job_id,
+                            "user": str(current_user),
+                            "user_dir": user_dir,
+                            "date": today_dir,
+                            "created_at": datetime.now().isoformat(timespec="seconds"),
+                            "source": "upload_drop_combined_txt",
+                            "paths": {
+                                "job_root": str(job_root),
+                                "combined_dir": str(combined_dir),
+                                "logs_dir": str(logs_dir),
+                            },
+                            "saved_files": saved,
+                        }
+                        write_text(job_root / "job.json", json.dumps(job_json, ensure_ascii=False, indent=2))
+                        append_log(log_path, "UPLOAD(COMBINED)->JOB DONE")
+
+                    st.session_state[K_UP_JOB_ID] = job_id
+                    st.session_state[K_UP_JOB_ROOT] = str(job_root)
+                    st.success(f"✅ 新規ジョブを作成しました: {job_root}")
+
+                finally:
+                    st.session_state[K_UP_LOCKED] = False
+
+        # 作成済み（または復元済み）なら、その job の combined を items に入れる
+        if st.session_state.get(K_UP_JOB_ROOT):
+            job_root = Path(st.session_state[K_UP_JOB_ROOT])
+            meta = _read_job_json(job_root)
+            created_at = meta.get("created_at")
+
+            combined_dir = job_root / "transcript_speaker_separated_combined"
+            combined_files = sorted(combined_dir.glob("*.txt"), key=lambda p: p.name.lower(), reverse=True)
+
+            for p in combined_files:
+                label = f"{job_root.parent.name} / {job_root.name} / {p.name} / created={_human_dt(created_at)}"
+                items.append(
+                    CombinedItem(
+                        label=label,
+                        path=p,
+                        job_dir=job_root,
+                        transcript_dir=combined_dir,
+                        job_id=job_root.name,
+                        date=job_root.parent.name,
+                        created_at=created_at,
+                    )
+                )
+    else:
+        st.info("連結テキスト（.txt）をアップロードしてください。")
+
+# ---- 共通：選択UI ----
+selected: Optional[CombinedItem] = None
+if items:
+    labels = [it.label for it in items]
+    picked = st.radio("処理対象（combined txt）", options=labels, index=0, key=k("picked_combined"))
+    selected = items[labels.index(picked)]
+    st.caption(f"選択ファイル: {selected.path}")
+
+    with st.expander("📌 選択ジョブ情報", expanded=False):
+        base_stem, original_name = get_base_from_original(selected.job_dir)
+
+        st.write(
+            {
+                "job_dir": str(selected.job_dir),
+                "transcript_dir": str(selected.transcript_dir),
+                "job_id": selected.job_id,
+                "date": selected.date,
+                "created_at": selected.created_at,
+                "original": original_name,
+                "base": base_stem,
+            }
+        )
+
+
+# ============================================================
+# 実行（非AI）
+# ============================================================
+st.subheader("実行")
+
+run = st.button(
+    "▶️ 重複箇所検出を実行する",
+    type="primary",
+    key=k("run_btn"),
+    disabled=(selected is None),
+)
 
 if run:
-    # 読む
+    if selected is None:
+        st.warning("処理対象（combined txt）を選択してください。")
+        st.stop()
+
+    it = selected  # NameError 防止
+
+    # 読み込み
     try:
         text = it.path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         text = it.path.read_text(encoding="cp932", errors="replace")
 
     # 実行
-    with st.spinner("重複箇所を検出しています…"):
-        merged, logs = build_merged_text(text, min_match_size, use_autojunk)
+    try:
+        with st.spinner("重複箇所を検出しています…"):
+            merged, logs = build_merged_text(text, int(min_match_size), bool(use_autojunk))
+    except Exception as e:
+        st.error(f"検出に失敗しました: {e}")
+        st.stop()
 
-    # 保存（同じ transcript/）
+    # 保存
     ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # ★ 追加：保存先フォルダ（transcript_marked）
     marked_dir = it.job_dir / "transcript_marked"
     safe_mkdir(marked_dir)
 
-    # ==============================
-    # 出力ファイル名
-    # ==============================
     out_txt = marked_dir / f"{it.path.stem}_marked.txt"
     out_log = marked_dir / f"{it.path.stem}_detect_log.json"
 
@@ -567,7 +815,6 @@ if run:
         },
     )
 
-    # jobの process.log にも軽く書く
     log_path = it.job_dir / "logs" / "process.log"
     append_log(log_path, "OVERLAP DETECT START")
     append_log(log_path, f"input={it.path.name}")
@@ -576,54 +823,109 @@ if run:
     append_log(log_path, f"min_match_size={min_match_size} autojunk={use_autojunk}")
     append_log(log_path, "OVERLAP DETECT DONE")
 
-    # 表示
-    st.success("処理が完了しました（ストレージに保存しました）。")
+    # 結果を session_state に保持（テンプレ準拠）
+    st.session_state[K_LAST_RESULT] = {
+        "selected": it.label,
+        "saved_marked_txt": str(out_txt),
+        "saved_log_json": str(out_log),
+        "ts_tag": ts_tag,
+        "log_count": len(logs),
+    }
 
-    st.markdown("### 💾 保存先（ストレージ）")
-    st.write({"merged_txt": str(out_txt), "log_json": str(out_log)})
+    st.success("重複検出が完了しました（ストレージに保存しました）。")
 
-    st.markdown("### 🔍 つなぎ目ごとの検出ログ（概要）")
-    if logs:
-        st.table(
-            [
-                {
-                    "つなぎ目番号": item["つなぎ目番号"],
-                    "ファイル名": item["ファイル名"],
-                    "検出結果": item["検出結果"],
-                    "開始位置": item["開始位置"],
-                    "一致文字数": item["一致文字数"],
-                }
-                for item in logs
-            ]
-        )
-    else:
-        st.info("つなぎ目マーカーが見つかりませんでした（ログは空）。")
+# ============================================================
+# 結果表示（テンプレ準拠）
+# ============================================================
+st.divider()
+st.subheader("結果")
 
-    with st.expander("🧩 head_phrase / matched_phrase 詳細", expanded=False):
-        if not logs:
-            st.info("ログがありません。")
-        else:
-            for item in logs:
-                st.markdown(f"#### つなぎ目 {item['つなぎ目番号']} — {item['検出結果']}")
-                st.markdown("**head_phrase**")
-                st.code(item.get("head_phrase") or "（空）")
-                st.markdown("**shifted_phrases**")
-                shifted = item.get("shifted_phrases") or []
-                if shifted:
-                    for s in shifted:
-                        st.code(s)
-                else:
-                    st.write("（なし）")
-                st.markdown("**matched_phrase**")
-                st.code(item.get("matched_phrase") or "（マッチなし）")
-                st.markdown("---")
+if st.session_state.get(K_LAST_RESULT) is None:
+    st.info("まだ結果がありません。")
+    st.stop()
 
-    with st.expander("📘 結果プレビュー（merged）", expanded=False):
-        st.text(merged)
+last = st.session_state[K_LAST_RESULT]
+st.caption(f"保存先: {last.get('saved_marked_txt')}")
 
-    st.download_button(
-        "📥 結合テキストをダウンロード (.txt)",
-        data=merged.encode("utf-8"),
-        file_name=f"{it.path.stem}_重複箇所検出_{ts_tag}.txt",
-        mime="text/plain",
+# 直近実行で選んだものを復元表示したい場合（selectedが変わると中身が変わるので、ここは“直近の結果”として表示）
+# ただし、詳細ログやプレビューは merged/logs が必要なので、直近実行時の結果を再生成せず、保存物を読む。
+
+# 保存した marked テキストを読む
+marked_path = Path(str(last.get("saved_marked_txt") or "")).expanduser()
+log_path_json = Path(str(last.get("saved_log_json") or "")).expanduser()
+
+merged_text = ""
+logs = []
+try:
+    if marked_path.exists():
+        try:
+            merged_text = marked_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            merged_text = marked_path.read_text(encoding="cp932", errors="replace")
+except Exception:
+    merged_text = ""
+
+try:
+    if log_path_json.exists():
+        logs_obj = json.loads(log_path_json.read_text(encoding="utf-8"))
+        logs = logs_obj.get("logs", []) if isinstance(logs_obj, dict) else []
+except Exception:
+    logs = []
+
+st.markdown("### 🔍 つなぎ目ごとの検出ログ（概要）")
+if logs:
+    st.table(
+        [
+            {
+                "つなぎ目番号": item.get("つなぎ目番号"),
+                "ファイル名": item.get("ファイル名"),
+                "検出結果": item.get("検出結果"),
+                "開始位置": item.get("開始位置"),
+                "一致文字数": item.get("一致文字数"),
+            }
+            for item in logs
+        ]
     )
+else:
+    st.info("ログがありません（つなぎ目マーカーが無い／未検出など）。")
+
+with st.expander("🧩 head_phrase / matched_phrase 詳細", expanded=False):
+    if not logs:
+        st.info("ログがありません。")
+    else:
+        for item in logs:
+            st.markdown(f"#### つなぎ目 {item.get('つなぎ目番号')} — {item.get('検出結果')}")
+            st.markdown("**head_phrase**")
+            st.code(item.get("head_phrase") or "（空）")
+            st.markdown("**shifted_phrases**")
+            shifted = item.get("shifted_phrases") or []
+            if shifted:
+                for s in shifted:
+                    st.code(s)
+            else:
+                st.write("（なし）")
+            st.markdown("**matched_phrase**")
+            st.code(item.get("matched_phrase") or "（マッチなし）")
+            st.markdown("---")
+
+with st.expander("📘 結果プレビュー（marked）", expanded=False):
+    st.text(merged_text)
+
+# --- download file_name に original 名を入れる ---
+job_dir_for_name = marked_path.parent.parent if marked_path else None  # .../job_xxx/transcript_marked/xxx.txt の想定
+base_stem, original_name = get_base_from_original(job_dir_for_name) if job_dir_for_name else ("none", "none")
+
+# ファイル名に使えるよう最低限安全化（スペース・スラッシュ等を潰す）
+orig_safe = (original_name or "none").strip()
+orig_safe = orig_safe.replace("\\", "_").replace("/", "_").replace(":", "_")
+orig_safe = re.sub(r"\s+", "_", orig_safe)
+
+ts_tag = str(last.get("ts_tag") or "")
+download_name = f"{orig_safe}__{marked_path.stem}__{ts_tag}.txt" if marked_path else "merged_marked.txt"
+
+st.download_button(
+    "📥 結合テキストをダウンロード (.txt)",
+    data=(merged_text or "").encode("utf-8"),
+    file_name=download_name,
+    mime="text/plain",
+)

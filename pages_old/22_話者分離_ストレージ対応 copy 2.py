@@ -57,6 +57,15 @@ PROJECTS_ROOT = _THIS.parents[3]
 if str(PROJECTS_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECTS_ROOT))
 
+# ============================================================
+# session_state keys：ページ単位で名前空間化（他ページ汚染防止）
+# ============================================================
+PAGE_KEY_PREFIX = _THIS.stem  # e.g. "22_話者分離_storage対応（新）"
+
+def k(name: str) -> str:
+    return f"{PAGE_KEY_PREFIX}::{name}"
+
+
 from common_lib.storage.external_ssd_root import resolve_storage_subdir_root
 from common_lib.auth.auth_helpers import require_login
 
@@ -318,7 +327,9 @@ if GEMINI_ENABLED:
     genai.configure(api_key=get_gemini_api_key())
 
 # ============================================================
-# Sidebar（モデル/プロンプト/通貨）
+# Sidebar（モデル / プロンプト / 通貨）
+# - UIは「旧・正常動作版」と同じ
+# - ただし key は衝突回避のため最小限だけ名前空間化（k()）
 # ============================================================
 with st.sidebar:
     st.subheader("モデル設定")
@@ -329,13 +340,19 @@ with st.sidebar:
         "gemini-2.0-flash",
     ]
 
-    st.session_state.setdefault("speaker_model", "gpt-5-mini")
-    model = st.radio("モデル", MODEL_OPTIONS, key="speaker_model")
+    # ---- model ----
+    st.session_state.setdefault(k("speaker_model"), "gpt-5-mini")
+    model = st.radio(
+        "モデル",
+        MODEL_OPTIONS,
+        key=k("speaker_model"),
+    )
 
     if model.startswith("gemini") and not GEMINI_ENABLED:
         st.warning("Gemini API Key が未設定です。")
         st.stop()
 
+    # ---- prompt level ----
     st.subheader("プロンプト設定")
 
     PROMPT_LEVEL_OPTIONS = [
@@ -343,13 +360,15 @@ with st.sidebar:
         "軽量（タイムアウト低減）",
         "超軽量（最小負荷）",
     ]
-    st.session_state.setdefault("speaker_prompt_level", PROMPT_LEVEL_OPTIONS[0])
+
+    st.session_state.setdefault(k("speaker_prompt_level"), "標準（精度優先）")
     prompt_level = st.radio(
         "話者分離プロンプト",
         PROMPT_LEVEL_OPTIONS,
-        key="speaker_prompt_level",
+        key=k("speaker_prompt_level"),
     )
 
+    # ---- currency ----
     st.subheader("通貨換算")
     usd_jpy = st.number_input(
         "USD/JPY",
@@ -357,39 +376,264 @@ with st.sidebar:
         max_value=500.0,
         value=float(DEFAULT_USDJPY),
         step=0.5,
+        key=k("speaker_usd_jpy"),
     )
+
 
 # ============================================================
 # メイン UI
 # ============================================================
 left, right = st.columns([1, 1], gap="large")
 
-# ---- 右：job 選択 ----
+# ---- 右：入力方式 + job 確定 ----
 with right:
-    st.subheader("① job フォルダー選択")
+    st.subheader("① 入力方式")
 
-    jobs = list_all_jobs(user_dir)
-    if not jobs:
-        st.info("minutes_app の job が見つかりません。")
-        st.stop()
+    input_mode = st.radio(
+        "どこから transcript を読み込むか",
+        options=[
+            "既存ジョブ（storage より読み込み）",
+            "新規アップロード（drop → 新規job作成 → transcript/ に保存）",
+        ],
+        index=0,
+        key=k("input_mode"),
+        help="新規アップロードは、アップロードした複数 .txt を transcript/ に保存し、その順番で連続話者分離します。",
+    )
 
-    labels = [j.label for j in jobs]
-    picked = st.radio("処理対象の job", options=labels, index=0)
-    job = jobs[labels.index(picked)]
-    job_dir = job.job_dir
+    # --- 新規アップロード用：21ページと同じ考え方（rerun耐性） ---
+    K_UP_LAST_SIG = k("upload_last_sig")
+    K_UP_JOB_ID = k("upload_job_id")
+    K_UP_JOB_ROOT = k("upload_job_root")
+    K_UP_LOCKED = k("upload_job_locked")
 
-    st.caption(f"job_dir: {job_dir}")
+    st.session_state.setdefault(K_UP_LAST_SIG, None)
+    st.session_state.setdefault(K_UP_JOB_ID, None)
+    st.session_state.setdefault(K_UP_JOB_ROOT, None)
+    st.session_state.setdefault(K_UP_LOCKED, False)
 
-    transcript_files = list_transcript_txts(job_dir)
-    if not transcript_files:
-        st.error("transcript/*.txt が見つかりません。")
-        st.stop()
+    def now_job_id() -> str:
+        return "job_" + datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    st.markdown("### 対象ファイル（処理順）")
-    st.write([p.name for p in transcript_files])
+    def safe_filename(name: str) -> str:
+        s = (name or "text").strip()
+        s = s.replace("\\", "_").replace("/", "_").replace(":", "_")
+        s = re.sub(r"\s+", " ", s)
+        return s or "text"
 
-    st.session_state["speaker_job_dir"] = str(job_dir)
-    st.session_state["speaker_transcript_files"] = [str(p) for p in transcript_files]
+    # --- 直近 N ジョブだけ残す（21と同様） ---
+    MAX_JOBS = 5
+
+    def cleanup_old_jobs(user_root: Path, max_jobs: int) -> None:
+        # 日付降順、job降順で数える（scanは list_all_jobs と同じ基準）
+        jobs_all = list_all_jobs(user_dir)
+        if len(jobs_all) <= max_jobs:
+            return
+        for j in jobs_all[max_jobs:]:
+            try:
+                import shutil
+                shutil.rmtree(j.job_dir)
+                day_dir = j.job_dir.parent
+                if day_dir.exists() and not any(day_dir.iterdir()):
+                    day_dir.rmdir()
+            except Exception:
+                pass
+
+    picked_job: Optional[JobItem] = None
+    transcript_files: List[Path] = []
+
+    if input_mode.startswith("既存ジョブ"):
+        st.subheader("ジョブ選択（storage）")
+        st.caption("直近5件より古いジョブは自動削除されます。")
+
+        cleanup_old_jobs(STORAGE_ROOT / user_dir / "minutes_app", MAX_JOBS)
+
+      
+
+        jobs = list_all_jobs(user_dir)
+        if not jobs:
+            st.info("minutes_app の job が見つかりません。先に文字起こしで job を作成してください。")
+            st.stop()
+
+
+
+
+        labels = [j.label for j in jobs]
+        picked = st.radio(
+            "対象ジョブ",
+            options=labels,
+            index=0,
+            key=k("job_picker"),
+            help="transcript/ を参照できる job を選びます。",
+        )
+        picked_job = jobs[labels.index(picked)]
+
+        job_dir = picked_job.job_dir
+        st.caption(f"job_dir: {job_dir}")
+
+        transcript_files = list_transcript_txts(job_dir)
+        if not transcript_files:
+            st.error("transcript/*.txt が見つかりません。")
+            st.stop()
+
+        st.markdown("### 対象ファイル（処理順）")
+        st.write([p.name for p in transcript_files])
+
+    else:
+        st.subheader("新規アップロード（drop）")
+
+        uploaded_files = st.file_uploader(
+            "文字起こしテキスト（.txt）をドロップ/選択（複数可・アップロード順＝連続順）",
+            type=["txt"],
+            accept_multiple_files=True,
+            key=k("uploader_txt"),
+        )
+
+        # ✅ 0件なら job作成ボタン自体を出さない（ここで終了）
+        if not uploaded_files:
+            st.info("テキストファイル（.txt）を1つ以上アップロードしてください。")
+            st.stop()
+            
+
+        sig_parts = [
+            f"{getattr(f, 'name', 'file')}:{getattr(f, 'size', 0)}"
+            for f in uploaded_files
+        ]
+        upload_sig = "|".join(sig_parts)
+
+        if st.session_state.get(K_UP_LAST_SIG) != upload_sig:
+            st.session_state[K_UP_LAST_SIG] = upload_sig
+            st.session_state[K_UP_JOB_ID] = None
+            st.session_state[K_UP_JOB_ROOT] = None
+            st.session_state[K_UP_LOCKED] = False
+
+        st.caption("※ アップロード順をそのまま連続処理の順番として使います。")
+        st.write({"files": [getattr(f, "name", "(no name)") for f in uploaded_files]})
+
+        existing_job_root = st.session_state.get(K_UP_JOB_ROOT)
+        existing_job_id = st.session_state.get(K_UP_JOB_ID)
+
+        if existing_job_root and existing_job_id and st.session_state.get(K_UP_LAST_SIG) == upload_sig:
+            job_root = Path(existing_job_root)
+            st.success(f"✅ 作成済みジョブを復元しました: {job_root}")
+
+        else:
+            create_job_clicked = st.button(
+                "📦 アップロードを transcript/ として保存して新規ジョブを作成",
+                type="primary",
+                disabled=bool(st.session_state.get(K_UP_LOCKED, False)),
+                key=k("create_job_btn"),
+                help="押した時点で Storages に job_YYYYMMDD_HHMMSS を作り、transcript/ に保存します（確定制）。",
+            )
+
+
+            if not create_job_clicked:
+                uploaded_ready = False
+
+
+            st.session_state[K_UP_LOCKED] = True
+
+            try:
+                with st.spinner("新規ジョブを作成して transcript/ に保存しています…"):
+                    today_dir = datetime.now().strftime("%Y-%m-%d")
+                    job_id = now_job_id()
+                    job_root = STORAGE_ROOT / user_dir / "minutes_app" / today_dir / job_id
+
+                    transcript_dir = job_root / "transcript"
+                    logs_dir = job_root / "logs"
+                    safe_mkdir(transcript_dir)
+                    safe_mkdir(logs_dir)
+
+                    log_path = logs_dir / "process.log"
+                    append_log(log_path, "UPLOAD->JOB START")
+                    append_log(log_path, f"job_dir={job_root}")
+
+                    transcript_index: List[dict] = []
+
+                    for i, uf in enumerate(uploaded_files, start=1):
+                        name = safe_filename(getattr(uf, "name", f"text_{i}.txt"))
+                        out_name = f"{i:03d}_{name}"
+                        out_path = transcript_dir / out_name
+                        b = uf.getvalue()
+                        try:
+                            text = b.decode("utf-8")
+                        except UnicodeDecodeError:
+                            text = b.decode("cp932", errors="ignore")
+                        write_text(out_path, text)
+
+                        transcript_index.append(
+                            {
+                                "order": i,
+                                "original_name": name,
+                                "saved_name": out_name,
+                                "saved_path": str(out_path),
+                                "size_bytes": int(len(b)),
+                            }
+                        )
+                        append_log(log_path, f"saved transcript -> {out_name}")
+
+                    job_json = {
+                        "job_id": job_id,
+                        "user": str(current_user),
+                        "user_dir": user_dir,
+                        "date": today_dir,
+                        "created_at": datetime.now().isoformat(timespec="seconds"),
+                        "source": "upload_drop_txt",
+                        "paths": {
+                            "job_root": str(job_root),
+                            "transcript_dir": str(transcript_dir),
+                            "logs_dir": str(logs_dir),
+                        },
+                        "status": {
+                            "speaker_separate": "not_started",
+                        },
+                        "transcript_index": transcript_index,
+                    }
+                    write_text(job_root / "job.json", json.dumps(job_json, ensure_ascii=False, indent=2))
+                    append_log(log_path, "UPLOAD->JOB DONE")
+
+                st.session_state[K_UP_JOB_ID] = job_id
+                st.session_state[K_UP_JOB_ROOT] = str(job_root)
+
+                cleanup_old_jobs(STORAGE_ROOT / user_dir / "minutes_app", MAX_JOBS)
+
+                st.success(f"✅ 新規ジョブを作成しました: {job_root}")
+                st.caption(f"保存先: {job_root}")
+
+            finally:
+                st.session_state[K_UP_LOCKED] = False
+
+        # --- job確定（復元後/作成後 共通） ---
+        job_root = Path(st.session_state[K_UP_JOB_ROOT])
+        st.caption(f"job_dir: {job_root}")
+
+        transcript_files = list_transcript_txts(job_root)
+        if not transcript_files:
+            st.error("transcript/*.txt が見つかりません。保存を確認してください。")
+            st.stop()
+
+        st.markdown("### 対象ファイル（処理順）")
+        st.write([p.name for p in transcript_files])
+
+    # ---- 以降の実行用に session に確定保存（キーは名前空間化） ----
+    # st.session_state[k("speaker_job_dir")] = str(job_dir)
+    # st.session_state[k("speaker_transcript_files")] = [str(p) for p in transcript_files]
+
+# ---- 以降の実行用に session に確定保存（job が確定している時だけ） ----
+job_ready = bool(transcript_files)
+
+if job_ready:
+    # 新規アップロード側では job_root を job_dir として扱う
+    if input_mode.startswith("新規アップロード"):
+        job_dir = job_root
+
+    st.session_state[k("speaker_job_dir")] = str(job_dir)
+    st.session_state[k("speaker_transcript_files")] = [str(p) for p in transcript_files]
+else:
+    st.session_state[k("speaker_job_dir")] = None
+    st.session_state[k("speaker_transcript_files")] = []
+
+
+
 
 
 # ---- 左：プロンプト & 実行 ----
@@ -398,7 +642,9 @@ with left:
 
     group = get_group(SPEAKER_PREP)
 
-    _level = st.session_state.get("speaker_prompt_level")
+    #_level = st.session_state.get("speaker_prompt_level")
+    _level = st.session_state.get(k("speaker_prompt_level"))
+
     if _level == "標準（精度優先）":
         mandatory_default = SPEAKER_MANDATORY
     elif _level == "軽量（タイムアウト低減）":
@@ -411,45 +657,52 @@ with left:
     #   - level が変わったときだけ mandatory_prompt を差し替える
     #   - 初回は setdefault で入れる
     # ============================================================
-    prev_level = st.session_state.get("_speaker_prompt_level_prev")
+    prev_level = st.session_state.get(k("_speaker_prompt_level_prev"))
 
     if prev_level is None:
-        st.session_state.setdefault("mandatory_prompt", mandatory_default)
-        st.session_state["_speaker_prompt_level_prev"] = _level
+        st.session_state.setdefault(k("mandatory_prompt"), mandatory_default)
+        st.session_state[k("_speaker_prompt_level_prev")] = _level
     else:
         if prev_level != _level:
-            st.session_state["mandatory_prompt"] = mandatory_default
-            st.session_state["_speaker_prompt_level_prev"] = _level
+            st.session_state[k("mandatory_prompt")] = mandatory_default
+            st.session_state[k("_speaker_prompt_level_prev")] = _level
         else:
-            st.session_state.setdefault("mandatory_prompt", mandatory_default)
+            st.session_state.setdefault(k("mandatory_prompt"), mandatory_default)
 
-    st.text_area("必須プロンプト", height=220, key="mandatory_prompt")
+    st.text_area("必須プロンプト", height=220, key=k("mandatory_prompt"))
 
     st.session_state.setdefault(
-        "preset_label", group.label_for_key(group.default_preset_key)
+        k("preset_label"), group.label_for_key(group.default_preset_key)
     )
     st.session_state.setdefault(
-        "preset_text", group.body_for_label(st.session_state["preset_label"])
+        k("preset_text"), group.body_for_label(st.session_state[k("preset_label")])
     )
-    st.session_state.setdefault("extra_text", "")
+    st.session_state.setdefault(k("extra_text"), "")
 
     def _on_change_preset():
-        st.session_state["preset_text"] = group.body_for_label(
-            st.session_state["preset_label"]
+        st.session_state[k("preset_text")] = group.body_for_label(
+            st.session_state[k("preset_label")]
         )
 
     st.selectbox(
         "追記プリセット",
         options=group.preset_labels(),
-        key="preset_label",
+        key=k("preset_label"),
         on_change=_on_change_preset,
     )
 
-    st.text_area("プリセット本文", height=120, key="preset_text")
-    st.text_area("追加指示（任意）", height=80, key="extra_text")
+    st.text_area("プリセット本文", height=120, key=k("preset_text"))
+    st.text_area("追加指示（任意）", height=80, key=k("extra_text"))
+
+
+
+    job_ready = bool(st.session_state.get(k("speaker_job_dir"))) and bool(st.session_state.get(k("speaker_transcript_files")))
 
     batch_btn = st.button(
-        "③ transcript を順番に話者分離（保存＋連結）", type="primary"
+        "③ transcript を順番に話者分離（ストレージ保存＋連結）",
+        type="primary",
+        key=k("batch_btn"),
+        disabled=not job_ready,
     )
 
 
@@ -457,8 +710,8 @@ with left:
 # 実行（バッチのみ）
 # ============================================================
 if batch_btn:
-    job_dir = Path(st.session_state["speaker_job_dir"])
-    transcript_files = [Path(p) for p in st.session_state["speaker_transcript_files"]]
+    job_dir = Path(st.session_state[k("speaker_job_dir")])
+    transcript_files = [Path(p) for p in st.session_state[k("speaker_transcript_files")]]
 
     speaker_sep_dir = job_dir / "transcript_speaker_separated"
     speaker_comb_dir = job_dir / "transcript_speaker_separated_combined"
@@ -489,9 +742,9 @@ if batch_btn:
             continue
 
         prompt = build_prompt(
-            st.session_state["mandatory_prompt"],
-            st.session_state["preset_text"],
-            st.session_state["extra_text"],
+            st.session_state[k("mandatory_prompt")],
+            st.session_state[k("preset_text")],
+            st.session_state[k("extra_text")],
             src,
         )
 
