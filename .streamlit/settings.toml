@@ -1,0 +1,4 @@
+# .streamlit/settings.toml
+
+BANNER_KEY = "light_green"
+

@@ -52,7 +52,6 @@ import streamlit as st
 # アプリ内モジュール（ページ資産）
 # ============================================================
 from lib.audio import get_audio_duration_seconds
-from lib.explanation import render_transcribe_continuous_expander
 
 # ============================================================
 # sys.path（common_lib を import できるように）
@@ -75,9 +74,11 @@ PAGE_NAME = _THIS.stem
 # ============================================================
 # common_lib（正本：sessions / ui / busy / storage）
 # ============================================================
-from common_lib.sessions.page_entry import page_session_heartbeat
-from common_lib.ui.ui_basics import subtitle
-from common_lib.ui.banner_lines import render_banner_line_by_key
+from common_lib.ui.page_header import render_standard_page_header
+from lib.transcribe.explanation import (
+    render_transcribe_page_intro,
+    render_transcribe_help_expander,
+)
 
 from common_lib.busy import busy_run, get_run
 from common_lib.ui.time_format import format_jst_iso_ja
@@ -125,41 +126,37 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".mp4", ".webm", ".ogg"}
 # ============================================================
 st.set_page_config(page_title="文字起こし — Storage Jobs", page_icon="🧪", layout="wide")
 
-# ------------------------------------------------------------
-# バナー（指定色）
-# ------------------------------------------------------------
-render_banner_line_by_key("light_green")
 
 # ============================================================
-# セッション記録（ログイン判定の正本）
+# 共通ヘッダー
+# - settings.toml から BANNER_KEY を取得
+# - banner / theme / intro CSS を描画
+# - page_session_heartbeat を実行
+# - title / subtitle / ログイン状態を描画
 # ============================================================
-sub = page_session_heartbeat(
-    st,
-    PROJECTS_ROOT,
+sub, theme, BANNER_KEY, settings = render_standard_page_header(
+    st_module=st,
+    projects_root=PROJECTS_ROOT,
+    app_dir=APP_DIR,
     app_name=APP_NAME,
     page_name=PAGE_NAME,
+    title="🎙️ 文字起こし",
+    subtitle_text="保存済み音声チャンクまたは新規アップロード音声を連続文字起こしします",
+    default_banner_key="light_green",
 )
-if not sub:
-    st.warning("ログインしていません。ポータルからログインしてください。")
-    st.stop()
 
 # ============================================================
-# タイトル帯
+# ページ説明
 # ============================================================
-left, right = st.columns([2, 1])
-with left:
-    st.title("🎙️ 文字起こし")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
+render_transcribe_page_intro()
 
-subtitle("ストレージ対応")
-st.caption("既存ジョブの split/ または新規アップロードから、連続文字起こししてストレージへ保存します。")
-st.write("サイドバーの設定は，特に変更する必要はありません．そのままお使いください．"
-         "但し英語の音声から文字起こしを行う場合は,「言語コード」を「en」に変更してください．")
-# ------------------------------------------------------------
-# 使い方（expander）
-# ------------------------------------------------------------
-render_transcribe_continuous_expander()
+# ============================================================
+# 詳細説明
+# ============================================================
+render_transcribe_help_expander(
+    theme=theme,
+    banner_key=BANNER_KEY,
+)
 
 # ============================================================
 # Storage root（PROJECTS_ROOT 基準）
@@ -350,12 +347,18 @@ for j in jobs_delete_for_cleanup:
 # ============================================================
 # 入力方式（事故の少ない radio）
 # ============================================================
-st.subheader("入力方式")
+st.subheader("① 音声ファイルの設定")
+st.caption("音声ファイルを読み込む先をここで指定します．"
+    "「音声ファイル分割」を行った時にサーバー内部に自動保存されたファイルを"
+    "使用するときは「既存ジョブ」を選択してください．")
+st.caption("**音声ファイル分割から議事録を作成する一連の作業**を，ここでは「ジョブ」と呼んでいます．"
+           "ここでの処理では，「ジョブ」という言葉で，分割された**音声ファイルの集合体**を指していることになります．")
 input_mode = st.radio(
-    "どこから音声チャンクを読み込むか",
-    options=["既存ジョブ（storage より読み込み）", "新規アップロード（drop → 新規job作成 → split/ に保存）"],
+    "音声ファイルを読み込む先をここで指定します．",
+    options=["既存ジョブ（サーバー内部のストレージより読み込み）", "新規アップロード"],
     index=0,
-    help="「新規アップロード」は、アップロードした複数ファイルをストレージに保存し、その順番で連続文字起こしします。",
+    label_visibility="collapsed",
+    #help="「新規アップロード」は、アップロードした複数ファイルをストレージに保存し、その順番で連続文字起こしします。",
 )
 
 # ============================================================
@@ -367,7 +370,7 @@ split_files: List[Path] = []
 if input_mode.startswith("既存ジョブ"):
     jobs = scan_jobs(USER_ROOT)
 
-    st.subheader("ジョブ選択（storage）")
+    st.markdown("#### ジョブ選択（サーバー内部の保存ファイル）")
     st.write("直近の5つのジョブより古いものは自動的に消去されます")
 
     if not jobs:
@@ -594,9 +597,10 @@ with st.sidebar:
 # ============================================================
 # メイン：実行ボタン
 # ============================================================
-st.subheader("実行")
+st.divider()
+st.subheader("② 文字起こしの実行")
 st.caption(f"処理対象ジョブ: {picked_job.job_dir if picked_job else '(none)'}")
-go = st.button("▶️ 文字起こしを実行（選択順）+ ストレージ保存", type="primary")
+go = st.button("▶️ 文字起こしを実行 + ストレージ保存", type="primary")
 out_area = st.container()
 
 # ============================================================

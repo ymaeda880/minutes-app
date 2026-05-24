@@ -48,10 +48,8 @@ st.set_page_config(
 # ============================================================
 # common_lib（正本）
 # ============================================================
-from common_lib.sessions.page_entry import page_session_heartbeat
-from common_lib.ui.ui_basics import subtitle
+from common_lib.ui.page_header import render_standard_page_header
 from common_lib.ui.time_format import format_jst_iso_ja
-from common_lib.ui.banner_lines import render_banner_line_by_key
 from common_lib.busy import busy_run
 
 # AI 正本（入口：routing）
@@ -79,12 +77,15 @@ from lib.prompts import (
     MINUTES_MANDATORY_MODES,
     MINUTES_STYLE,
     MINUTES_GLOBAL_MANDATORY,
-    DEFAULT_MINUTES_MODE,   # ★追加
+    DEFAULT_MINUTES_MODE,
     get_group,
     build_prompt,
 )
 
-from lib.explanation import render_minutes_help_expander_tabs
+from lib.minutes_generation.explanation import (
+    render_minutes_page_intro,
+    render_minutes_help_expander,
+)
 
 # ============================================================
 # Gemini 利用可否チェック（テンプレ同一：google-genai）
@@ -154,30 +155,35 @@ except Exception:
     Document = None  # type: ignore
 
 # ============================================================
-# ログイン + セッション heartbeat（page 共通）
+# 共通ヘッダー
+# - settings.toml から BANNER_KEY を取得
+# - banner / theme / intro CSS を描画
+# - page_session_heartbeat を実行
+# - title / subtitle / ログイン状態を描画
 # ============================================================
-render_banner_line_by_key("light_green")
-
-sub = page_session_heartbeat(
-    st,
-    PROJECTS_ROOT,
+sub, theme, BANNER_KEY, settings = render_standard_page_header(
+    st_module=st,
+    projects_root=PROJECTS_ROOT,
+    app_dir=_THIS.parents[1],
     app_name=APP_NAME,
     page_name=PAGE_NAME,
+    title="🎧 議事録作成",
+    subtitle_text="逐語録から正式議事録へ",
+    default_banner_key="light_green",
 )
 
-left, right = st.columns([2, 1])
-with left:
-    st.title("🎧 議事録作成")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
-subtitle("逐語録から正式議事録へ")
+# ============================================================
+# ページ説明
+# ============================================================
+render_minutes_page_intro()
 
-st.markdown("AIの回答は，毎回**ある程度の揺れ**があります．満足できない結果が得られたときは，再度実行してください．")
 # ============================================================
-# 使い方・プロンプト仕様（tabs）
-# ※ lib 側が expander を使っているため、外側 expander は作らない
+# 詳細説明
 # ============================================================
-render_minutes_help_expander_tabs()
+render_minutes_help_expander(
+    theme=theme,
+    banner_key=BANNER_KEY,
+)
 
 # ============================================================
 # セッション初期化（表示が消えない用の保険）
@@ -322,7 +328,8 @@ def _extract_usage_tokens_from_result(res: Any) -> tuple[Optional[int], Optional
 # ============================================================
 # 上：入力テキスト（3方式）
 # ============================================================
-st.subheader("整形済みテキスト（入力）")
+st.divider()
+st.subheader("① 逐語録入力")
 
 INBOX_PAGE_SIZE = 6
 
@@ -485,7 +492,8 @@ src = st.text_area(
 # ============================================================
 # 下：プロンプト設定
 # ============================================================
-st.subheader("プロンプト")
+st.divider()
+st.subheader("② 議事録形式の設定")
 
 group = get_group(MINUTES_MAKER)
 style_group = get_group(MINUTES_STYLE)
@@ -586,7 +594,7 @@ with st.expander("必須パート（編集可：モード別）", expanded=False
         key="minutes_mandatory",
     )
 
-st.markdown("#### 追記プリセット（内容）")
+st.markdown("#### 追記プリセット")
 
 prev_selected_keys = st.session_state.get("minutes_selected_preset_keys", [])
 current_selected_keys = []
@@ -611,11 +619,14 @@ if set(current_selected_keys) != set(prev_selected_keys):
 #     key="minutes_preset_text",
 # )
 
+st.markdown("#### 追加指示")
 st.text_area("追加指示（任意）", height=88, key="minutes_extra_text")
 
 # ============================================================
 # 実行
 # ============================================================
+st.divider()
+st.subheader("③ 議事録を生成")
 run_btn = st.button("📝 議事録を生成", type="primary")
 
 if run_btn:
@@ -755,11 +766,11 @@ if final_text:
     # ------------------------------------------------------------
     final_text_md = re.sub(r"(?<!\n)\n(?!\n)", "  \n", final_text)
 
-    st.markdown("### 📝 生成結果（Markdown 表示）")
+    st.markdown("### 📝 生成結果")
     st.markdown(final_text_md)
 
 
-    st.subheader("📥 議事録の保存")
+    st.subheader("④ 議事録の保存")
 
     input_name = st.session_state.get("minutes_input_filename", "")
     input_stem = safe_filename(Path(input_name).stem) if input_name else "minutes"
@@ -842,7 +853,7 @@ if final_text:
         except Exception as e:
             st.error(f"Word 出力でエラーが発生しました: {e}")
 else:
-    st.info("整形済みテキストを入力して『📝 議事録を生成』を実行してください。")
+    st.info("逐語録を入力して『📝 議事録を生成』を実行してください。")
 
 # ============================================================
 # 📊 実行時間（get_run 正本）＋ cost UI（正本）＋ 実行サマリ（共通UI）

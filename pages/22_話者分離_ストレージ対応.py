@@ -88,9 +88,7 @@ def _gemini_available() -> bool:
 # ============================================================
 # common_lib（正本：sessions / ui / busy / storage）
 # ============================================================
-from common_lib.sessions.page_entry import page_session_heartbeat
-from common_lib.ui.ui_basics import subtitle
-from common_lib.ui.banner_lines import render_banner_line_by_key
+from common_lib.ui.page_header import render_standard_page_header
 from common_lib.busy import busy_run
 from common_lib.storage.external_ssd_root import resolve_storage_subdir_root
 
@@ -119,12 +117,16 @@ from common_lib.ui.model_picker import render_text_model_picker
 # 外部ユーティリティ（既存資産：プロンプト生成などはページ責務）
 # ============================================================
 from ui.style import disable_heading_anchors
-from lib.explanation import render_speaker_prep_expander
 from lib.prompts import SPEAKER_PREP, get_group, build_prompt
 from lib.prompts import (
     SPEAKER_MANDATORY,
     SPEAKER_MANDATORY_LIGHT,
     SPEAKER_MANDATORY_LIGHTER,
+)
+
+from lib.speaker_prep.explanation import (
+    render_speaker_prep_page_intro,
+    render_speaker_prep_help_expander,
 )
 
 # ============================================================
@@ -310,41 +312,42 @@ st.set_page_config(
     layout="wide",
 )
 
+
 # ------------------------------------------------------------
-# UI小物（見出しアンカー無効化 / バナー）
+# UI小物（見出しアンカー無効化）
 # ------------------------------------------------------------
-disable_heading_anchors()
-render_banner_line_by_key("light_green")
+#disable_heading_anchors()
 
 # ============================================================
-# セッション記録（ログイン判定の正本）
+# 共通ヘッダー
+# - settings.toml から BANNER_KEY を取得
+# - banner / theme / intro CSS を描画
+# - page_session_heartbeat を実行
+# - title / subtitle / ログイン状態を描画
 # ============================================================
-sub = page_session_heartbeat(
-    st,
-    PROJECTS_ROOT,
+sub, theme, BANNER_KEY, settings = render_standard_page_header(
+    st_module=st,
+    projects_root=PROJECTS_ROOT,
+    app_dir=APP_DIR,
     app_name=APP_NAME,
     page_name=PAGE_NAME,
+    title="🎙️ 話者分離",
+    subtitle_text="文字起こしテキストを話者ごとに分離",
+    default_banner_key="light_green",
 )
 
-# ------------------------------------------------------------
-# 未ログイン時（念のため）
-# ------------------------------------------------------------
-if not sub:
-    st.warning("ログインしていません。ポータルからログインしてください。")
-    st.stop()
+# ============================================================
+# ページ説明
+# ============================================================
+render_speaker_prep_page_intro()
 
 # ============================================================
-# タイトル帯（テンプレ準拠）
+# 詳細説明
 # ============================================================
-left, right = st.columns([2, 1])
-with left:
-    st.title("🎙️ 話者分離・整形")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
-
-subtitle("ストレージ対応")
-st.caption("transcript/*.txt を順番に話者分離し、ストレージへ個別保存＋連結保存します。")
-render_speaker_prep_expander()
+render_speaker_prep_help_expander(
+    theme=theme,
+    banner_key=BANNER_KEY,
+)
 
 # ============================================================
 # セッションキー（正本：run + 合計）
@@ -385,7 +388,7 @@ with st.sidebar:
     # モデル設定（Text 正本UI）
     # - 戻り値は provider:model（例: openai:gpt-5-mini）
     # ------------------------------------------------------------
-    st.subheader("モデル設定")
+    #st.subheader("モデル設定")
 
     st.session_state.setdefault(k("speaker_model_key"), DEFAULT_TEXT_MODEL_KEY)
 
@@ -420,8 +423,8 @@ with st.sidebar:
 # ============================================================
 # ① プロンプト（expander）
 # ============================================================
-with st.expander("① プロンプト（クリックで開く）", expanded=False):
-    st.subheader("① プロンプト")
+with st.expander("プロンプト（クリックで開く）", expanded=False):
+    st.subheader("プロンプト")
 
     group = get_group(SPEAKER_PREP)
 
@@ -475,8 +478,15 @@ with st.expander("① プロンプト（クリックで開く）", expanded=Fals
 # ============================================================
 # ② 入力（ここで job_dir / transcript_files を確定）
 # ============================================================
-st.subheader("入力")
-st.caption("文字起こしテキスト（.txt）を複数アップロードできます（順番＝連続処理順）。")
+#st.subheader("入力方式")
+#st.caption("文字起こしテキスト（.txt）を複数アップロードできます（順番＝連続処理順）。")
+
+st.subheader("① テキストファイルの設定")
+st.caption("文字起こししたテキストファイルを読み込む先をここで指定します．"
+    "「文字起こし」を行った時にサーバー内部に自動保存されたテキストファイルを"
+    "使用するときは「既存ジョブ」を選択してください．")
+
+
 
 current_user = sub
 user_dir = _sanitize_username_for_path(str(current_user))
@@ -484,10 +494,11 @@ user_dir = _sanitize_username_for_path(str(current_user))
 input_mode = st.radio(
     "どこから transcript を読み込むか",
     options=[
-        "既存ジョブ（storage より読み込み）",
-        "新規アップロード（drop → 新規job作成 → transcript/ に保存）",
+        "既存ジョブ（サーバー内部のストレージより読み込み）",
+        "新規アップロード",
     ],
     index=0,
+    label_visibility="collapsed",
     key=k("input_mode"),
 )
 
@@ -507,6 +518,10 @@ transcript_files: List[Path] = []
 # ------------------------------------------------------------
 if input_mode.startswith("既存ジョブ"):
     jobs = list_all_jobs(user_dir)
+    #st.subheader("ジョブ選択（サーバー内部の保存ファイル）")
+    st.markdown("##### ジョブ選択（サーバー内部の保存ファイル）")
+    st.write("直近の5つのジョブより古いものは自動的に消去されます")
+
     if not jobs:
         st.info("minutes_app の job が見つかりません。先に文字起こしで job を作成してください。")
     else:
@@ -516,12 +531,30 @@ if input_mode.startswith("既存ジョブ"):
         job_dir = job.job_dir
 
         transcript_files = list_transcript_txts(job_dir)
+
+        # if transcript_files:
+        #     st.caption(f"job_dir: {job_dir}")
+        #     st.markdown("##### 対象ファイル（処理順）")
+        #     st.write([p.name for p in transcript_files])
+        # else:
+        #     st.error("transcript/*.txt が見つかりません。")
+
+
         if transcript_files:
-            st.caption(f"job_dir: {job_dir}")
-            st.markdown("### 対象ファイル（処理順）")
-            st.write([p.name for p in transcript_files])
+
+            with st.expander(
+                f"対象ファイル（処理順）：{len(transcript_files)}件",
+                expanded=False,
+            ):
+                st.caption(f"job_dir: {job_dir}")
+
+                for p in transcript_files:
+                    st.markdown(f"- `{p.name}`")
+
         else:
-            st.error("transcript/*.txt が見つかりません。")
+            st.error(
+                "transcript/*.txt が見つかりません。"
+            )
 
 # ------------------------------------------------------------
 # 新規アップロード
@@ -636,13 +669,27 @@ else:
 
         if job_dir:
             transcript_files = list_transcript_txts(job_dir)
-            if transcript_files:
-                st.caption(f"job_dir: {job_dir}")
-                st.markdown("### 対象ファイル（処理順）")
-                st.write([p.name for p in transcript_files])
-            else:
-                st.error("transcript/*.txt が見つかりません。保存を確認してください。")
+            # if transcript_files:
+            #     st.caption(f"job_dir: {job_dir}")
+            #     st.markdown("### 対象ファイル（処理順）")
+            #     st.write([p.name for p in transcript_files])
+            # else:
+            #     st.error("transcript/*.txt が見つかりません。保存を確認してください。")
 
+            if transcript_files:
+                with st.expander(
+                    f"対象ファイル（処理順）：{len(transcript_files)}件",
+                    expanded=False,
+                ):
+                    st.caption(f"job_dir: {job_dir}")
+
+                    for p in transcript_files:
+                        st.markdown(f"- `{p.name}`")
+
+            else:
+                st.error(
+                    "transcript/*.txt が見つかりません。保存を確認してください。"
+                )
 # ============================================================
 # job_ready / 実行用 state 確定
 # ============================================================
@@ -657,10 +704,11 @@ if not job_ready:
 # ============================================================
 # ③ 実行（AI実行 + busy 記録）
 # ============================================================
-st.subheader("実行")
+st.divider()
+st.subheader("② 話者分離の実行")
 
 batch_btn = st.button(
-    "▶️ transcript を順番に話者分離（ストレージ保存＋連結）",
+    "▶️ 文字起こしテキストを順番に話者分離（ストレージ保存＋連結）",
     type="primary",
     key=k("batch_btn"),
     disabled=not job_ready,
@@ -921,8 +969,8 @@ if batch_btn:
 # 📊 実行サマリ（テンプレ準拠：1ブロック表示）
 # - run_id / tokens / cost / time を 1つに統合
 # ============================================================
-st.divider()
-st.subheader("📊 実行サマリ（テンプレ準拠）")
+#st.divider()
+st.markdown("#### 📊 実行サマリ")
 
 render_run_summary_compact(
     projects_root=PROJECTS_ROOT,

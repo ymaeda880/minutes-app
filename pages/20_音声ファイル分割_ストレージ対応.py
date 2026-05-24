@@ -29,7 +29,7 @@ from pathlib import Path
 import streamlit as st
 from pydub import AudioSegment
 
-from lib.explanation import render_audio_split_expander
+
 
 # ============================================================
 # sys.path（common_lib を import できるように）
@@ -50,10 +50,13 @@ PAGE_NAME = _THIS.stem
 # ============================================================
 # common_lib（正本）
 # ============================================================
-from common_lib.sessions.page_entry import page_session_heartbeat
-from common_lib.ui.ui_basics import subtitle
+from common_lib.ui.page_header import render_standard_page_header
 from common_lib.storage.external_ssd_root import resolve_storage_subdir_root
-from common_lib.ui.banner_lines import render_banner_line_by_key
+
+from lib.audio_split.explanation import (
+    render_audio_split_page_intro,
+    render_audio_split_help_expander,
+)
 
 # ============================================================
 # Storage config（PROJECTS_ROOT 基準）
@@ -226,50 +229,42 @@ def _reset_job_lock_on_new_upload(upload_sig: str) -> None:
 # ページ設定（必須・統一）
 # ============================================================
 st.set_page_config(
-    page_title="音声分割ツール（ストレージ対応）",
+    page_title="Minutes Maker",
     page_icon="🎧",
     layout="wide",
 )
 
-render_banner_line_by_key("light_green")
 
 # ============================================================
-# セッション記録（ログイン判定の正本）
+# 共通ヘッダー
+# - settings.toml から BANNER_KEY を取得
+# - banner / theme / intro CSS を描画
+# - page_session_heartbeat を実行
+# - title / subtitle / ログイン状態を描画
 # ============================================================
-sub = page_session_heartbeat(
-    st,
-    PROJECTS_ROOT,
+sub, theme, BANNER_KEY, settings = render_standard_page_header(
+    st_module=st,
+    projects_root=PROJECTS_ROOT,
+    app_dir=APP_DIR,
     app_name=APP_NAME,
     page_name=PAGE_NAME,
+    title="🎧 音声ファイル分割",
+    subtitle_text="音声ファイルを分割し、文字起こし前の前処理を行います",
+    default_banner_key="light_green",
 )
-
-# 未ログインなら止める（テンプレ準拠）
-if not sub:
-    st.warning("ログインしていません。ポータルからログインしてください。")
-    st.stop()
-
-# ============================================================
-# タイトル帯（テンプレ準拠）
-# ============================================================
-left, right = st.columns([2, 1])
-with left:
-    st.title("🎧 音声分割ツール")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
-
-subtitle("ストレージ対応")
-st.caption("音声を分割（オーバーラップ付）し、ZIP化してダウンロード＋Storagesへ保存します。")
 
 # ============================================================
 # ページ説明
 # ============================================================
-st.write(
-    "アップロードした音声（MP3/WAV/MP4）を一定長さで分割し、隣接チャンクに重なり（オーバーラップ）をつけます。"
-    "文字起こし（transcription）前の前処理として使ってください。"
-)
+render_audio_split_page_intro()
 
-st.write("サイドバーの設定は，特に変更する必要はありません．そのままお使いください．")
-render_audio_split_expander()
+# ============================================================
+# 詳細説明
+# ============================================================
+render_audio_split_help_expander(
+    theme=theme,
+    banner_key=BANNER_KEY,
+)
 
 # ============================================================
 # 保存パス用ユーザー名（sanitized）
@@ -313,7 +308,7 @@ with st.sidebar:
 # ============================================================
 # 入力
 # ============================================================
-st.subheader("入力")
+st.subheader("① 音声ファイルの設定")
 
 uploaded = st.file_uploader(
     "音声ファイルをアップロード（MP3/WAV/MP4）",
@@ -381,7 +376,8 @@ st.session_state[K_ROWS] = rows
 # ============================================================
 # 実行（非AI）— 保存トリガー
 # ============================================================
-st.subheader("実行")
+st.divider()
+st.subheader("② 音声を分割")
 
 go = st.button(
     "📦 分割済み音声を生成（ZIP作成＋ストレージ保存）",
@@ -567,16 +563,14 @@ if go:
 # ============================================================
 # 結果表示（テンプレ準拠）
 # ============================================================
-st.divider()
-st.subheader("結果")
 
 # 1) プレビュー表
 if st.session_state.get(K_ROWS) is None:
     st.info("まだ結果がありません。")
 else:
-    st.subheader("分割プレビュー")
+    st.markdown("#### ファイル詳細")
     st.dataframe(st.session_state[K_ROWS], hide_index=True)
-    st.caption("※ ここでは Storages に保存しません。保存は上のボタンを押したときだけです。")
+    #st.caption("※ ここでは Storages に保存しません。保存は上のボタンを押したときだけです。")
 
 # 2) ZIPダウンロード（ZIP作成後に表示）
 zip_bytes = st.session_state.get(K_ZIP_BYTES)

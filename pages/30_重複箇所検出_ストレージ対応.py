@@ -28,8 +28,6 @@ from typing import List, Dict, Tuple, Any, Optional
 
 import streamlit as st
 
-from lib.explanation import render_overlap_detect_storage_expander
-
 # ============================================================
 # sys.path（common_lib を import できるように）
 # ============================================================
@@ -49,9 +47,12 @@ PAGE_NAME = _THIS.stem
 # ============================================================
 # common_lib（正本）
 # ============================================================
-from common_lib.sessions.page_entry import page_session_heartbeat
-from common_lib.ui.ui_basics import subtitle
-from common_lib.ui.banner_lines import render_banner_line_by_key
+from common_lib.ui.page_header import render_standard_page_header
+
+from lib.overlap_detect.explanation import (
+    render_overlap_detect_page_intro,
+    render_overlap_detect_help_expander,
+)
 from common_lib.storage.external_ssd_root import resolve_storage_subdir_root
 
 # ============================================================
@@ -490,38 +491,43 @@ def build_merged_text(
 # ページ設定（必須・統一）
 # ============================================================
 st.set_page_config(
-    page_title="重複箇所検出（storage対応）",
+    page_title="Minutes Maker",
     page_icon="📝",
     layout="wide",
 )
 
-# バナー（指定）
-render_banner_line_by_key("light_green")
 
 # ============================================================
-# セッション記録（ログイン判定の正本）
+# 共通ヘッダー
+# - settings.toml から BANNER_KEY を取得
+# - banner / theme / intro CSS を描画
+# - page_session_heartbeat を実行
+# - title / subtitle / ログイン状態を描画
 # ============================================================
-sub = page_session_heartbeat(
-    st,
-    PROJECTS_ROOT,
+sub, theme, BANNER_KEY, settings = render_standard_page_header(
+    st_module=st,
+    projects_root=PROJECTS_ROOT,
+    app_dir=APP_DIR,
     app_name=APP_NAME,
     page_name=PAGE_NAME,
+    title="📝 重複箇所検出",
+    subtitle_text="連結テキストのつなぎ目重複を検出し，重複部分に目印を挿入します",
+    default_banner_key="light_green",
 )
 
-if not sub:
-    st.warning("ログインしていません。ポータルからログインしてください。")
-    st.stop()
+# ============================================================
+# ページ説明
+# ============================================================
+render_overlap_detect_page_intro()
 
-left, right = st.columns([2, 1])
-with left:
-    st.title("📝 重複箇所検出")
-with right:
-    st.success(f"✅ ログイン中: **{sub}**")
+# ============================================================
+# 詳細説明
+# ============================================================
+render_overlap_detect_help_expander(
+    theme=theme,
+    banner_key=BANNER_KEY,
+)
 
-subtitle("ストレージ対応")
-st.caption("連結テキストの「つなぎ目」重複を検出し、前半側に BEGIN_TAG を挿入して保存します。")
-
-render_overlap_detect_storage_expander()
 
 current_user = sub
 user_dir = _sanitize_username_for_path(str(current_user))
@@ -535,15 +541,19 @@ st.session_state.setdefault(K_LAST_RESULT, None)
 # ============================================================
 # 入力
 # ============================================================
-st.subheader("入力")
+st.subheader("① テキストファイルの設定")
+st.caption("話者分離して結合したテキストファイルを読み込む先をここで指定します．"
+    "「話者分離」を行った時にサーバー内部に自動保存されたテキストファイルを"
+    "使用するときは「既存ジョブ」を選択してください．")
 
 input_mode = st.radio(
     "どこから combined txt を読み込むか",
     options=[
-        "既存（storage から選択）",
-        "新規アップロード（drop → 新規job作成 → combined 保存）",
+        "既存ジョブ（storage から選択）",
+        "新規アップロード",
     ],
     index=0,
+    label_visibility="collapsed",
     key=k("input_mode"),
 )
 
@@ -602,8 +612,10 @@ with st.sidebar:
 # ============================================================
 items: list[CombinedItem] = []
 
-if input_mode.startswith("既存"):
+if input_mode.startswith("既存ジョブ"):
     items = list_combined_texts(user_dir)
+    st.markdown("##### ジョブ選択（サーバー内部の保存ファイル）")
+    st.write("直近の5つのジョブより古いものは自動的に消去されます")
     if not items:
         st.info(
             "Storages に連結テキスト（combined txt）が見つかりません。\n\n"
@@ -730,7 +742,10 @@ else:
 selected: Optional[CombinedItem] = None
 if items:
     labels = [it.label for it in items]
-    picked = st.radio("処理対象（combined txt）", options=labels, index=0, key=k("picked_combined"))
+    picked = st.radio("処理対象（combined txt）",
+        options=labels, index=0,
+        label_visibility="collapsed",
+        key=k("picked_combined"))
     selected = items[labels.index(picked)]
     st.caption(f"選択ファイル: {selected.path}")
 
@@ -753,7 +768,7 @@ if items:
 # ============================================================
 # 実行（非AI）
 # ============================================================
-st.subheader("実行")
+st.subheader("② 重複箇所検出の実行")
 
 run = st.button(
     "▶️ 重複箇所検出を実行する",
@@ -832,13 +847,14 @@ if run:
         "log_count": len(logs),
     }
 
-    st.success("重複検出が完了しました（ストレージに保存しました）。")
+    #st.success("重複検出が完了しました（ストレージに保存しました）。")
+    st.success("重複検出が完了しました（ファイルをパソコンにダウンロードして確認してください）。")
 
 # ============================================================
 # 結果表示（テンプレ準拠）
 # ============================================================
 st.divider()
-st.subheader("結果")
+st.subheader("③ 結果")
 
 if st.session_state.get(K_LAST_RESULT) is None:
     st.info("まだ結果がありません。")
@@ -923,9 +939,30 @@ orig_safe = re.sub(r"\s+", "_", orig_safe)
 ts_tag = str(last.get("ts_tag") or "")
 download_name = f"{orig_safe}__{marked_path.stem}__{ts_tag}.txt" if marked_path else "merged_marked.txt"
 
+st.markdown(
+    """
+<style>
+div.stDownloadButton > button {
+    background-color: #ff1744;
+    color: white;
+    border: 1px solid #d50000;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+div.stDownloadButton > button:hover {
+    background-color: #d50000;
+    color: white;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.download_button(
-    "📥 結合テキストをダウンロード (.txt)",
+    "📥 検出済みのテキストをダウンロード",
     data=(merged_text or "").encode("utf-8"),
     file_name=download_name,
     mime="text/plain",
 )
+
