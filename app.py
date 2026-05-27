@@ -56,22 +56,22 @@ st.set_page_config(
 # ============================================================
 pg = st.navigation(
     {
-        "🏠 Home": [
+        f"{NAV_HOME_ICON}": [
             st.Page(
                 "pages/00_トップ.py",
                 title="トップ",
-                icon="🏠",
+                icon=PAGE_HOME_ICON,
                 default=True,
             ),
         ],
-        "📝 議事録": [
+        f"{NAV_PROCESS_ICON} 議事録": [
             st.Page(
                 "pages/07_議事録作成（新）.py",
                 title="議事録作成（新）",
                 icon="📝",
             ),
         ],
-        "🎙️ 逐語録までの処理": [
+        f"{NAV_PROCESS_ICON} 逐語録までの処理": [
             st.Page(
                 "pages/20_音声ファイル分割_ストレージ対応.py",
                 title="音声ファイル分割",
@@ -120,7 +120,7 @@ pg = st.navigation(
                 icon="✨",
             ),
         ],
-        "📦 その他": [
+        f"{NAV_PORTAL_RETURN_ICON}": [
             st.Page(
                 "pages/50_ポータルへ戻る.py",
                 title="ポータルへ戻る",

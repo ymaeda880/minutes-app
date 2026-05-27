@@ -355,7 +355,7 @@ if picked_method == INPUT_FILE:
     )
 
     do_set_file = st.button(
-        "① セット（ファイル）",
+        "セット（ファイル）",
         type="primary",
         disabled=(up is None),
         key=f"{PAGE_NAME}_btn_set_file",
@@ -403,7 +403,7 @@ elif picked_method == INPUT_PASTE:
     )
 
     do_set_paste = st.button(
-        "① セット（貼り付け）",
+        "セット（貼り付け）",
         type="primary",
         key=f"{PAGE_NAME}_btn_set_paste",
     )
@@ -452,7 +452,7 @@ else:
         st.caption("(保持中) まだ選択されていません。")
 
     do_set_inbox = st.button(
-        "① セット（Inbox）",
+        "セット（Inbox）",
         type="primary",
         disabled=(not bool(kept_bytes)),
         key=f"{PAGE_NAME}_btn_set_inbox",
