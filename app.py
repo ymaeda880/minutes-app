@@ -37,6 +37,7 @@ from common_lib.ui.nav_icons import (
     NAV_CONSTRUCTION_ICON,
     PAGE_HOME_ICON,
     PAGE_PORTAL_RETURN_ICON,
+    NAV_STOP_ICON,
 )
 
 
@@ -92,6 +93,17 @@ pg = st.navigation(
                 title="重複箇所検出",
                 icon="🔎",
             ),
+            st.Page(
+                "pages/35_音声ファイル一括処理.py",
+                title="音声ファイル一括処理",
+                icon="🔄",
+            ),
+            # st.Page(
+            #     "pages/36_音声ファイル一括処理OLD.py",
+            #     title="音声ファイル一括処理（古い）",
+            #     icon="🔄",
+            # ),
+
         ],
         "🕰️ 旧ページ": [
             st.Page(
@@ -114,11 +126,11 @@ pg = st.navigation(
                 title="話者分離（旧）",
                 icon="👥",
             ),
-            st.Page(
-                "pages/68_話者分離（Gemini）.py",
-                title="話者分離 Gemini",
-                icon="✨",
-            ),
+            # st.Page(
+            #     "pages/68_話者分離（Gemini）.py",
+            #     title="話者分離 Gemini",
+            #     icon="✨",
+            # ),
         ],
         f"{NAV_PORTAL_RETURN_ICON}": [
             st.Page(
@@ -129,7 +141,7 @@ pg = st.navigation(
 
         ],
 
-        f"{NAV_CONSTRUCTION_ICON} 開発・管理": [
+        f"{NAV_STOP_ICON} 開発・管理": [
             st.Page(
                 "pages/999_開発用管理者ログイン.py",
                 title="開発用 管理者ログイン",

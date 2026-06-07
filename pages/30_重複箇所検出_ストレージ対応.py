@@ -511,7 +511,7 @@ sub, theme, BANNER_KEY, settings = render_standard_page_header(
     app_name=APP_NAME,
     page_name=PAGE_NAME,
     title="📝 重複箇所検出",
-    subtitle_text="連結テキストのつなぎ目重複を検出し，重複部分に目印を挿入します",
+    subtitle_text="連結テキストのつなぎ目重複を検出",
     default_banner_key="light_green",
 )
 

@@ -104,7 +104,7 @@ from common_lib.ai.costs.ui import render_transcribe_cost_summary
 # ============================================================
 # common_lib.ui（run summary：Transcribe 専用）
 # ============================================================
-from common_lib.ui.run_summary import render_run_summary_transcribe_compact
+from common_lib.ui.run_summary import render_run_summary_transcribe_compact_v2
 
 
 # ============================================================
@@ -141,7 +141,7 @@ sub, theme, BANNER_KEY, settings = render_standard_page_header(
     app_name=APP_NAME,
     page_name=PAGE_NAME,
     title="🎙️ 文字起こし",
-    subtitle_text="保存済み音声チャンクまたは新規アップロード音声を連続文字起こしします",
+    subtitle_text="音声ファイルを文字起こし",
     default_banner_key="light_green",
 )
 
@@ -762,19 +762,54 @@ if go:
                         st.markdown(f"### 📁 {idx}. {path.name}")
                         st.text_area("テキスト（個別）", value=text, height=220, key=f"ta_{idx}")
 
+                        # render_transcribe_cost_summary(
+                        #     title="概算（この音声ファイル）",
+                        #     model=str(model),
+                        #     audio_sec=audio_sec,
+                        #     cost=tr.cost,
+                        #     notes=None,
+                        # )
+
                         render_transcribe_cost_summary(
                             title="概算（この音声ファイル）",
                             model=str(model),
                             audio_sec=audio_sec,
+                            in_tokens=(
+                                int(tr.usage.input_tokens)
+                                if getattr(tr, "usage", None) is not None
+                                and tr.usage.input_tokens is not None
+                                else None
+                            ),
+                            out_tokens=(
+                                int(tr.usage.output_tokens)
+                                if getattr(tr, "usage", None) is not None
+                                and tr.usage.output_tokens is not None
+                                else None
+                            ),
+                            elapsed_sec=float(elapsed),
                             cost=tr.cost,
                             notes=None,
                         )
 
-                        # 人間に見やすく 1行ずつ
-                        st.caption(f"処理時間：{elapsed:.2f} 秒")
-                        st.caption(f"音声長：{audio_sec:.1f} 秒" if audio_sec is not None else "音声長：—")
-                        st.caption(f"request-id：{tr.request_id or '—'}")
-                        st.caption(f"保存先：{str(out_txt)}")
+                        # ============================================================
+                        # compact meta
+                        # ============================================================
+                        meta_cols = st.columns([2, 2, 2])
+
+                        with meta_cols[0]:
+                            st.caption(f"モデル：{model}")
+
+                        with meta_cols[1]:
+                            st.caption(f"処理時間：{elapsed:.2f} 秒")
+
+                        with meta_cols[2]:
+                            if audio_sec is not None:
+                                st.caption(f"音声長：{audio_sec:.1f} 秒")
+                            else:
+                                st.caption("音声長：—")
+
+                        #st.caption(f"request-id：{tr.request_id or '—'}")
+                        #st.caption(f"保存先：{str(out_txt)}")
 
                     per_file_results.append(
                         dict(
@@ -920,7 +955,7 @@ if has_run:
     # ------------------------------------------------------------
     total_audio_sec = st.session_state.get("total_audio_sec", None)
 
-    render_run_summary_transcribe_compact(
+    render_run_summary_transcribe_compact_v2(
         projects_root=PROJECTS_ROOT,
         run_id=last_run_id,
         model=str(model),

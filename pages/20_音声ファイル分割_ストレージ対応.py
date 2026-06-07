@@ -249,7 +249,7 @@ sub, theme, BANNER_KEY, settings = render_standard_page_header(
     app_name=APP_NAME,
     page_name=PAGE_NAME,
     title="🎧 音声ファイル分割",
-    subtitle_text="音声ファイルを分割し、文字起こし前の前処理を行います",
+    subtitle_text="音声ファイルを分割",
     default_banner_key="light_green",
 )
 
@@ -391,18 +391,18 @@ if go:
     try:
         with st.spinner("分割済み音声をエクスポートして ZIP を作成しています…"):
             # ============================================================
-            # 1) job 固定：最初の1回だけ作る
+            # 1) job 作成
+            # - 分割ボタンを押すたびに必ず新しい job を作る
+            # - 同じ音声ファイルを条件変更して再実行しても split/ が混在しない
             # ============================================================
-            if st.session_state[K_JOB_ID] is None:
-                today_dir = datetime.now().strftime("%Y-%m-%d")
-                job_id = now_job_id()
-                job_root = STORAGE_ROOT / username / "minutes_app" / today_dir / job_id
+            today_dir = datetime.now().strftime("%Y-%m-%d")
+            job_id = now_job_id()
+            job_root = STORAGE_ROOT / username / "minutes_app" / today_dir / job_id
 
-                st.session_state[K_JOB_ID] = job_id
-                st.session_state[K_JOB_ROOT] = str(job_root)
-
-            job_id = st.session_state[K_JOB_ID]
-            job_root = Path(st.session_state[K_JOB_ROOT])
+            st.session_state[K_JOB_ID] = job_id
+            st.session_state[K_JOB_ROOT] = str(job_root)
+            st.session_state[K_ZIP_BYTES] = None
+            st.session_state[K_ZIP_NAME] = None
 
             # ============================================================
             # 2) 保存先ディレクトリ作成

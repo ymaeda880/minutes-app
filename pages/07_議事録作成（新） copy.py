@@ -88,18 +88,6 @@ from lib.minutes_generation.explanation import (
 )
 
 # ============================================================
-# 要約長設定（話者別要約など）
-# ============================================================
-from lib.minutes_generation.summary_length import (
-    CUSTOM_LABEL,
-    build_summary_length_instruction,
-    get_summary_length_config,
-    get_summary_length_options,
-    merge_extra_with_summary_length_instruction,
-    resolve_target_chars,
-)
-
-# ============================================================
 # Gemini 利用可否チェック（テンプレ同一：google-genai）
 # ============================================================
 def _gemini_available() -> bool:
@@ -144,12 +132,6 @@ K_MODEL_KEY = f"{PAGE_NAME}__model_key"
 # busy 表示用
 K_LAST_RUN_ID = f"{PAGE_NAME}__last_run_id"
 K_LAST_RUN_ACTION = f"{PAGE_NAME}__last_run_action"
-
-# ============================================================
-# 要約長設定（話者別要約など）
-# ============================================================
-K_SUMMARY_LENGTH_LABEL = f"{PAGE_NAME}__summary_length_label"
-K_SUMMARY_LENGTH_CUSTOM_CHARS = f"{PAGE_NAME}__summary_length_custom_chars"
 
 # usage/cost 表示用（推計しない：返ってきた範囲だけ）
 K_LAST_IN_TOK = f"{PAGE_NAME}__last_in_tok"
@@ -220,10 +202,6 @@ st.session_state.setdefault(K_INBOX_ADDED, "")
 
 # モデル（正本UI）
 st.session_state.setdefault(K_MODEL_KEY, DEFAULT_TEXT_MODEL_KEY)
-
-# 要約長設定（初期値）
-st.session_state.setdefault(K_SUMMARY_LENGTH_LABEL, "標準（500字程度）")
-st.session_state.setdefault(K_SUMMARY_LENGTH_CUSTOM_CHARS, 500)
 
 # busy
 st.session_state.setdefault(K_LAST_RUN_ID, "")
@@ -595,50 +573,10 @@ with col_right:
                "時系列的に長い発言の列の順番を正確に記憶することがAIは苦手です．）")
     # st.write("もう少し長い文章もOK。ここは自由枠です。")
 
-# ============================================================
-# 要約長設定UI
-# - まずは「話者別要約」にだけ接続
-# - 将来「議事録」「会議全体要約」にも同じ仕組みを適用する
-# ============================================================
-current_minutes_mode = str(st.session_state.get("minutes_mode", "") or "")
-summary_length_config = get_summary_length_config(current_minutes_mode)
 
-if summary_length_config is not None:
-    st.markdown("#### 要約の長さ")
-
-    summary_length_options = get_summary_length_options(current_minutes_mode)
-
-    # ------------------------------------------------------------
-    # モード変更時に、そのモードの既定ラベルへ補正する
-    # ------------------------------------------------------------
-    current_length_label = str(st.session_state.get(K_SUMMARY_LENGTH_LABEL, "") or "")
-    if current_length_label not in summary_length_options:
-        st.session_state[K_SUMMARY_LENGTH_LABEL] = summary_length_config.default_label
-        current_length_label = summary_length_config.default_label
-
-    st.radio(
-        summary_length_config.title,
-        options=summary_length_options,
-        key=K_SUMMARY_LENGTH_LABEL,
-        horizontal=True,
-    )
-
-    # ------------------------------------------------------------
-    # カスタム選択時のみ、文字数入力を表示する
-    # ------------------------------------------------------------
-    if st.session_state.get(K_SUMMARY_LENGTH_LABEL) == CUSTOM_LABEL:
-        st.number_input(
-            f"{summary_length_config.custom_label}"
-            f"（{summary_length_config.min_chars}字以上）",
-            min_value=summary_length_config.min_chars,
-            step=summary_length_config.step_chars,
-            key=K_SUMMARY_LENGTH_CUSTOM_CHARS,
-        )
-
-st.markdown("#### スタイルの調整")
 st.radio(
-    "横線",
-    options=["横線あり", "横線なし"],
+    "見た目のスタイル（横線）",
+    options=["見た目1：横線あり", "見た目2：横線なし"],
     key="minutes_visual_mode",
 )
 
@@ -649,12 +587,12 @@ if "minutes_preset_text" not in st.session_state:
 if "minutes_extra_text" not in st.session_state:
     st.session_state["minutes_extra_text"] = ""
 
-# with st.expander("必須パート（編集可：モード別）", expanded=False):
-#     st.text_area(
-#         "議事録の種類ごとに異なる必須パートです（Minutes 共通ルールはコード側で自動付与されます）。",
-#         height=220,
-#         key="minutes_mandatory",
-#     )
+with st.expander("必須パート（編集可：モード別）", expanded=False):
+    st.text_area(
+        "議事録の種類ごとに異なる必須パートです（Minutes 共通ルールはコード側で自動付与されます）。",
+        height=220,
+        key="minutes_mandatory",
+    )
 
 st.markdown("#### 追記プリセット")
 
@@ -726,44 +664,13 @@ if run_btn:
     else:
         mandatory_all = MINUTES_GLOBAL_MANDATORY
 
-
-    # ------------------------------------------------------------
-    # 要約長設定を追加指示に反映
-    # - まずは「話者別要約」に接続
-    # - summary_length.py 側の設定があるモードだけ反映される
-    # ------------------------------------------------------------
-    summary_length_instruction = ""
-
-    current_minutes_mode = str(st.session_state.get("minutes_mode", "") or "")
-    summary_length_config = get_summary_length_config(current_minutes_mode)
-
-    if summary_length_config is not None:
-        selected_length_label = str(st.session_state.get(K_SUMMARY_LENGTH_LABEL, "") or "")
-        custom_chars = st.session_state.get(K_SUMMARY_LENGTH_CUSTOM_CHARS)
-
-        target_chars = resolve_target_chars(
-            mode=current_minutes_mode,
-            selected_label=selected_length_label,
-            custom_chars=custom_chars,
-        )
-
-        summary_length_instruction = build_summary_length_instruction(
-            mode=current_minutes_mode,
-            target_chars=target_chars,
-        )
-
-    extra_text_for_prompt = merge_extra_with_summary_length_instruction(
-        extra_text=st.session_state.get("minutes_extra_text", "") or "",
-        summary_length_instruction=summary_length_instruction,
-    )
-
     # ------------------------------------------------------------
     # プロンプト組み立て
     # ------------------------------------------------------------
     combined = build_prompt(
         mandatory_all,
         merged_preset,
-        extra_text_for_prompt,
+        st.session_state.get("minutes_extra_text", ""),
         src,
     )
 
@@ -853,37 +760,6 @@ if run_btn:
 raw_text = (st.session_state.get("minutes_raw_output") or "").strip()
 final_text = (st.session_state.get("minutes_final_output") or "").strip()
 
-
-# ============================================================
-# 議事録プレビュー用 CSS
-# - GPT出力は変更しない
-# - 画面表示だけ h1/h2/h3 を小さくする
-# ============================================================
-st.markdown(
-    """
-    <style>
-    .minutes-preview h1 {
-        font-size: 1.6rem !important;
-        margin-top: 0.8rem !important;
-        margin-bottom: 0.6rem !important;
-    }
-
-    .minutes-preview h2 {
-        font-size: 1.35rem !important;
-        margin-top: 0.7rem !important;
-        margin-bottom: 0.5rem !important;
-    }
-
-    .minutes-preview h3 {
-        font-size: 1.15rem !important;
-        margin-top: 0.6rem !important;
-        margin-bottom: 0.4rem !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 if final_text:
     # ------------------------------------------------------------
     # Markdown表示用：単一改行だけを「強制改行」に変換（空行は段落として保持）
@@ -891,11 +767,7 @@ if final_text:
     final_text_md = re.sub(r"(?<!\n)\n(?!\n)", "  \n", final_text)
 
     st.markdown("### 📝 生成結果")
-    #st.markdown(final_text_md)
-    st.markdown(
-        f'<div class="minutes-preview">\n\n{final_text_md}\n\n</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(final_text_md)
 
 
     st.subheader("④ 議事録の保存")

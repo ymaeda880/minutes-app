@@ -159,7 +159,7 @@ with right:
     st.success(
         f"✅ ログイン中: **{sub}**"
     )
-subtitle("音声ファイルから議事録を作成するAIアプリ")
+subtitle("議事録作成：音声ファイルから議事録を作成するAIプラットフォーム")
 
 
 # ============================================================
@@ -237,7 +237,7 @@ with theme_area:
 # ============================================================
 render_hero_panel(
     kicker="MINUTES MAKER",
-    title="音声から、確認済み逐語録へ。逐語録から、使える議事録へ。",
+    title="音声から逐語録へ，そして議事録へ",
     body_html="""
 <span class="ts-highlight">Minutes Maker</span> は、
 音声分割・文字起こし・話者分離・重複箇所検出・議事録作成を
@@ -267,7 +267,6 @@ render_two_column_cards(
 <span class="ts-highlight">
 文字起こし → 話者分離 → 重複箇所検出
 </span>
-
 の順に処理します。<br><br>
 
 各ステップの成果物はストレージに保存され、
@@ -304,12 +303,11 @@ render_two_column_cards(
 """,
     right_title="📝 既存サービスとの併用も可能です",
     right_body_html="""
-AI議事録・Notta 等で作成した逐語録を取り込み、
+国際会議などの公開情報であれば，AI議事録・Notta 等で作成した逐語録を取り込み、
 
 <span class="ts-highlight">
 Minutes Maker の議事録生成機能
 </span>
-
 のみを利用する運用も可能です。
 """,
 )
