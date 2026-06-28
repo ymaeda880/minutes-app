@@ -31,6 +31,7 @@ def render_minutes_page_intro() -> None:
     render_info_card_compact(
 body_html="""
 ⛔ このページでは，<b>AIを使用</b>しますので，<b>個人情報や機密情報の入力は避けてください</b>．
+将来的には<b>匿名処理</b>を行う予定です．<b>プレックAIガイドライン</b>（整備中）に従って使用してください．
 """,
     )
 

@@ -9,6 +9,7 @@ openai>=1.40.0
 # === 追加分 ===
 python-docx>=1.0.0   # Wordファイル入力対応
 pandas>=2.2.0        # 表形式出力（トークン/料金表示など）
+openpyxl>=3.1
 
 # gemini
 #google-generativeai
@@ -18,5 +19,4 @@ google-genai
 extra-streamlit-components
 
 werkzeug
-
 PyJWT

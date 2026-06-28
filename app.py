@@ -67,9 +67,20 @@ pg = st.navigation(
         ],
         f"{NAV_PROCESS_ICON} 議事録": [
             st.Page(
-                "pages/07_議事録作成（新）.py",
-                title="議事録作成（新）",
+                "pages/07_議事録作成.py",
+                title="議事録作成",
                 icon="📝",
+            ),
+            st.Page(
+                "pages/08_要約逐語録作成.py",
+                title="要約逐語録作成",
+                icon="📝",
+            ),
+
+            st.Page(
+                "pages/15_議事録ヘッダー作成.py",
+                title="議事録ヘッダー作成",
+                icon="📄",
             ),
         ],
         f"{NAV_PROCESS_ICON} 逐語録までの処理": [
